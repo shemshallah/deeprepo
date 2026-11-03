@@ -62,10 +62,11 @@ class StatusBoard:
         if s.number:
             return True
         try:
-            found = s._api("GET", f"/repos/{s.repo}/issues?labels={LABEL}&state=open&per_page=5")
-            if found:
-                s.number = found[0]["number"]
-                s.node_id = found[0].get("node_id")
+            found = s._api("GET", f"/repos/{s.repo}/issues?labels={LABEL}&state=open&per_page=20")
+            exact = [i for i in found if (i.get("title") or "").strip() == TITLE]
+            if exact:
+                s.number = exact[0]["number"]
+                s.node_id = exact[0].get("node_id")
             else:
                 issue = s._api("POST", f"/repos/{s.repo}/issues",
                                {"title": TITLE, "body": "starting…", "labels": [LABEL]})
