@@ -8,7 +8,7 @@ slot_list     builds the 16-slot tier view from the latest compaction manifest.
 connect_tier  opens a tier: repovram (read-only) or reporam (journal reader/writer).
 hf_stream     ranged streaming reader for Hugging Face GGUF downloads (workflows only).
 """
-import collections, hashlib, json, os, struct, threading, time, urllib.error, urllib.request
+import collections, hashlib, http.client, json, os, struct, threading, time, urllib.error, urllib.parse, urllib.request
 
 import ram16
 from .geom import forge_header
@@ -166,13 +166,92 @@ class TierStore(RetryStore):
         h = forge_header(slot, page=s.geom["page"], pps=s.geom["pps"], hdr=s.geom["hdr"], ns=s.geom["ns"])
         if x is None:
             return SparseAsset(slot, h)
-        a = ram16.Asset(x["url"], s.token, True) if s.token else ram16.Asset(x["browser_download_url"])
+        a = KeepAliveAsset(x["url"], s.token, True) if s.token else KeepAliveAsset(x["browser_download_url"])
         if s.disk_cache is not None:
             a = CachedAsset(a, name, s.disk_cache, x["size"])
         return SparseAsset(slot, h, real=a, real_size=x["size"])
 
     def asset(s, name):
         return s._wrap(name)
+
+
+class _NoRedir(urllib.request.HTTPRedirectHandler):
+    def redirect_request(s, *a, **k):
+        return None
+
+
+class KeepAliveAsset:
+    """Ranged reader with per-thread persistent HTTPS connections.
+
+    The pager issues ~150-4,000 4 MiB range requests per token/prefill; a new TLS
+    handshake per request dominates latency. This reuses one connection per CDN host.
+    """
+
+    _tl = threading.local()
+
+    def __init__(s, url, token=None, api=False):
+        s.url, s.token, s.api = url, token, api
+        s._sig, s._exp, s.size = None, 0.0, None
+
+    def _resolve(s):
+        h = {"User-Agent": "deeprepo"}
+        if s.token:
+            h["Authorization"] = f"Bearer {s.token}"
+            h["Accept"] = "application/octet-stream"
+        rq = urllib.request.Request(s.url, headers=h)
+        try:
+            urllib.request.build_opener(_NoRedir).open(rq, timeout=30)
+        except urllib.error.HTTPError as e:
+            if e.code in (301, 302, 303, 307):
+                s._sig, s._exp = e.headers["Location"], time.time() + 240
+                return
+            raise
+        s._sig, s._exp = s.url, time.time() + 240
+
+    def _conn(s, host):
+        pool = getattr(KeepAliveAsset._tl, "pool", None)
+        if pool is None:
+            pool = KeepAliveAsset._tl.pool = {}
+        c = pool.get(host)
+        if c is None:
+            c = pool[host] = http.client.HTTPSConnection(host, timeout=120)
+        return c
+
+    def read(s, off, n, tries=5):
+        for k in range(tries):
+            u = s.url
+            if s.token or s.api:
+                if not s._sig or time.time() > s._exp:
+                    s._resolve()
+                u = s._sig
+            p = urllib.parse.urlparse(u)
+            host = p.netloc
+            path = p.path + ("?" + p.query if p.query else "")
+            conn = s._conn(host)
+            try:
+                conn.request("GET", path, headers={"Range": f"bytes={off}-{off + n - 1}",
+                                                   "User-Agent": "deeprepo"})
+                r = conn.getresponse()
+                b = r.read()
+                if r.status in (301, 302, 303, 307):
+                    loc = r.getheader("Location")
+                    if loc:
+                        s._sig, s._exp = loc, time.time() + 240
+                        raise IOError("redirect")
+                if r.status == 200:
+                    b = b[off:off + n]
+                if r.status not in (200, 206) or len(b) != n:
+                    raise IOError(f"short read {len(b)}/{n} http={r.status}")
+                return b
+            except Exception:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+                getattr(KeepAliveAsset._tl, "pool", {}).pop(host, None)
+                if k == tries - 1:
+                    raise
+                time.sleep(min(0.25 * 2 ** k, 4))
 
 
 class Journal(RetryStore):

@@ -171,6 +171,11 @@ class Qwen3MoE:
             out[c:c + n] = (xn @ s.head[c:c + n].astype(np.float32).T)[0]
         return out
 
+    def prefetch(s, name):
+        t = s.g.tensors.get(name)
+        if t is not None:
+            s.v.prefetch(t.addr, t.nbytes)
+
     def _embd_rows(s, ids):
         s.st["vram_reads"] += 1
         return s.g.gather_rows("token_embd.weight", ids)
@@ -241,6 +246,9 @@ class Qwen3MoE:
         topv = np.take_along_axis(probs, top, axis=1)
         topv = topv / topv.sum(axis=1, keepdims=True)                           # renorm
         out = np.zeros((C, d), np.float32)
+        if C > 4:  # prefill: fetch the layer's expert tensors in few large runs
+            for nm in ("ffn_gate_exps", "ffn_up_exps", "ffn_down_exps"):
+                s.prefetch(f"blk.{l}.{nm}.weight")
         for e in range(s.ne):
             rows = np.nonzero((top == e).any(axis=1))[0]
             if rows.size == 0:

@@ -180,6 +180,10 @@ def _run_shift(env, job_id, shift_minutes, shift_tokens, max_shifts, log):
     st["decode_secs"] = round(time.time() - t_decode0, 1)
     st["first_token_secs"] = round(t_first, 1) if t_first is not None else None
     st["tok_per_s"] = round(max(0, made - made_start) / max(1e-6, st["decode_secs"]), 3)
+    try:
+        regs.put("stats/last", {"job": job_id, **st})
+    except Exception:
+        pass
     if done:
         regs.put(f"run/{job_id}/done", {"tokens": made, "stats": st})
         ring.Lease.free(regs, runner)
