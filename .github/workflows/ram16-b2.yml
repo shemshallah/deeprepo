@@ -10,9 +10,8 @@ on:
         default: status
         options: [init, status, format-url, serve, commit, gc]
       model_url:
-        description: Public HTTPS GGUF URL (Qwen3-4B Q4_K_M is preselected)
+        description: Public HTTPS URL for the GGUF (format-url only)
         required: false
-        default: "https://huggingface.co/bartowski/Qwen_Qwen3-4B-Instruct-2507-GGUF/resolve/main/Qwen_Qwen3-4B-Instruct-2507-Q4_K_M.gguf"
         type: string
       kv_mb:
         description: KV spill region size in MiB when formatting
@@ -81,10 +80,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 350
     env:
-      # This repository (deeprepo) is the coordinator. Derive its canonical
-      # owner/repo identity from GitHub instead of requiring a manual variable.
-      # GitHub concurrency groups are repository-scoped, not account-global.
-      RAM16_COORDINATOR_REPO: ${{ github.repository }}
+      # All writers must be dispatched through this single repository. GitHub
+      # concurrency groups are repository-scoped, not account-global.
+      RAM16_COORDINATOR_REPO: ${{ vars.RAM16_COORDINATOR_REPO }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
