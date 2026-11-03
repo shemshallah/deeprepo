@@ -203,9 +203,26 @@ def test_sparse_bins_are_absent():
         shutil.rmtree(tmp)
 
 
+def test_prefix_kv_reuse_matches_full_prefill():
+    """Encoding prompt then suffix at pos=len(prompt) must match a fresh full prefill."""
+    tmp = tempfile.mkdtemp()
+    try:
+        gguf, size, vram, ram, kv, wp = setup(tmp)
+        prompt, suffix = [5, 9, 23], [71, 3, 44]
+        eng = Qwen3MoE(vram, 1, size, ramkv=ram, kv_layout=kv, f16_cache_mb=4, strict=True)
+        full = eng.forward(prompt + suffix, 0)
+        eng.forward(prompt, 0)
+        reused = eng.forward(suffix, len(prompt))
+        assert np.allclose(full, reused, atol=8e-3, rtol=1e-3), np.abs(full - reused).max()
+        print("  prefix KV reuse matches full prefill (fp16 KV tolerance)")
+    finally:
+        shutil.rmtree(tmp)
+
+
 if __name__ == "__main__":
     test_engine_matches_dense()
     test_kv_lives_in_reporam()
     test_handoff_and_compaction()
     test_sparse_bins_are_absent()
+    test_prefix_kv_reuse_matches_full_prefill()
     print("engine tests passed")

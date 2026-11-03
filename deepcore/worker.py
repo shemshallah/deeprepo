@@ -102,14 +102,19 @@ def _run_shift(env, job_id, shift_minutes, shift_tokens, max_shifts, log):
     log(f"run: job {job_id} epoch {lease['epoch']} prompt {pos_prompt} prev {made} target {max_new}")
     t_prefill0 = time.time()
     if made == 0:
-        # fresh job: chunked prefill of the whole prompt
+        # fresh job: chunked prefill, reusing the session's KV prefix when provided
+        prefix = max(0, min(int(job.get("prefix_len", 0)), len(prompt_ids) - 1))
+        if prefix:
+            log(f"run: reusing KV prefix of {prefix}/{len(prompt_ids)} tokens")
         last_logits = None
-        i = 0
+        i = prefix
         while i < len(prompt_ids):
             chunk = prompt_ids[i:i + eng.chunk]
             last_logits = eng.forward(chunk, i)
             i += len(chunk)
             regs.commit()  # keeps KV + tails durable as prefill progresses
+        if last_logits is None:  # no new suffix: re-encode the last token for logits
+            last_logits = eng.forward([prompt_ids[-1]], len(prompt_ids) - 1)
     else:
         # continue: re-encode the last generated token (idempotent KV write) to get its logits
         last_logits = eng.forward([prev[-1]], pos_prompt + made - 1)

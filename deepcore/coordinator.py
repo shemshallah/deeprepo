@@ -129,6 +129,15 @@ class Coordinator:
             max_tokens = int(os.environ.get("MAX_REPLY_TOKENS", "48"))
         ids = tok.chat_ids(req.messages)
         active = regs.get(f"sess/active/{req.id}")
+        prefix_len = 0
+        if not active:
+            prev = (regs.get(f"sess/ctx/{req.id}") or {}).get("ids") or []
+            m = min(len(prev), len(ids))
+            while prefix_len < m and prev[prefix_len] == ids[prefix_len]:
+                prefix_len += 1
+            prefix_len = min(prefix_len, max(0, m - 1))
+            if prefix_len < 16:
+                prefix_len = 0
         job = regs.get(f"job/{active['job']}") if active else None
         if job and not regs.get(f"run/{active['job']}/done"):
             job_id, ids = active["job"], job.get("prompt_ids", ids)
@@ -141,6 +150,7 @@ class Coordinator:
                 "gen": {"max_tokens": left, "temp": 0.7, "top_k": 20, "top_p": 0.8,
                         "penalty": 1.05, "seed": int(time.time()) % 2**31,
                         "f16_cache_mb": 1856, "chunk": 192},
+                "prefix_len": prefix_len,
                 "t": int(time.time())})
             regs.put(f"sess/active/{req.id}", {"job": job_id, "t": int(time.time())})
             regs.commit()
@@ -151,6 +161,10 @@ class Coordinator:
         if done:
             q.finish(handle, text or "(no output)")
             final = regs.get(f"run/{job_id}/done") or {}
+            gen_ids = []
+            for k in regs.keys(f"run/{job_id}/tok/"):
+                gen_ids += regs.get(k)["ids"]
+            regs.put(f"sess/ctx/{req.id}", {"ids": ids + gen_ids, "t": int(time.time())})
             regs.put(f"sess/{req.id}/{job_id}", {"q": (req.messages[-1]["content"] or "")[:2000],
                                                  "a": text[:8000], "stats": final.get("stats")})
             if (regs.get(f"sess/active/{req.id}") or {}).get("job") == job_id:
