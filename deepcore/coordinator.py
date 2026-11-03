@@ -6,6 +6,7 @@ reporam, streams the reply, and rotates to the next runner at shift boundaries.
 """
 import json
 import os
+import sys
 import time
 
 import ram16
@@ -204,6 +205,8 @@ def main(argv):
                                    on_token=lambda t: print(t, flush=True))
             print(("\n" if text else "") + ("DONE" if done else "TIMEOUT"), flush=True)
             env.persist_budget()
+            if not done:
+                sys.exit(3)
     finally:
         print("BUDGET_EXHAUSTED" if env.budget.exhausted() else "BUDGET_OK", flush=True)
 
