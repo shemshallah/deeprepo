@@ -9,7 +9,12 @@ import time
 
 def cmd_status(env):
     from .geom import read_super
-    sb_r, sb_v = read_super(env.ram), read_super(env.vram)
+    sb_r = read_super(env.ram)
+    try:
+        sb_v = read_super(env.vram)
+    except Exception as e:
+        sb_v = {"error": f"no superblock ({e}); run 00-bootstrap or re-run 03 to repair"}
+        print(f"repovram superblock: {sb_v['error']}")
     mi = env.model_info() or {}
     b = env.budget.snapshot()
     print(f"reporam  {env.ram_repo}  gen {env.ram.gen} deltas {len(env.ram.journal.list()) if env.ram.journal else 0} "

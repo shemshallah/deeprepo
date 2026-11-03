@@ -53,6 +53,8 @@ def test_import_tiles_and_engine_reads():
         # resume with the recorded progress must not re-upload
         res2 = import_model(store, jstore, FakeHf(data), resume=True, work=tmp)
         assert puts == ["mem-00.bin"], f"resume re-uploaded: {puts}"
+        raw = open(os.path.join(vdir, "mem-00.bin"), "rb").read()
+        assert raw[4 << 20:4 << 20 + 6] == b"DPRSB1", "import must preserve/regenerate the superblock"
         # engine over the imported tier matches the dense reference
         from deepcore.engine import Qwen3MoE
         ram_j = os.path.join(tmp, "journal")

@@ -195,9 +195,8 @@ def import_model(vram_store, jstore, hf, budget=None, resume=True, work="/tmp", 
             # it deterministically (never ship a weights bin without a valid superblock).
             try:
                 a = vram_store.asset(name)
-                probe = a.read(BIN_HDR, 8)
-                if probe == b"DPRSB1":
-                    sb_page = probe + a.read(BIN_HDR + 8, PAGE - 8)
+                if a.read(BIN_HDR, 6) == b"DPRSB1":
+                    sb_page = a.read(BIN_HDR, PAGE)
                     log("import: preserved the vram superblock page")
             except Exception as e:
                 log(f"import: warning: could not fetch existing superblock page: {e!r}")
