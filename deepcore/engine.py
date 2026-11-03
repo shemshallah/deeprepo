@@ -48,7 +48,7 @@ def softmax(x, axis=-1):
 
 class Qwen3MoE:
     def __init__(s, vram, wbase_page, model_size, ramkv=None, kv_layout=None,
-                 f16_cache_mb=2560, chunk=256, strict=False, expert_cache_mb=512):
+                 f16_cache_mb=2560, chunk=256, strict=False, expert_cache_mb=1024):
         s.v, s.kv = vram, ramkv
         s.g = G.GGUFOnRam(vram, wbase_page, model_size)
         meta, arch = s.g.meta, s.g.meta["general.architecture"]
@@ -143,7 +143,8 @@ class Qwen3MoE:
         rows = int(t.dims[1])                       # gate/up: n_ff; down: n_embd
         w = w.reshape(rows, int(t.dims[0]))
         s.ecount[key] += 1
-        if not s.strict and s.ecache_cap > 0:
+        # admit only on second use: cold one-off experts would just churn the cache
+        if not s.strict and s.ecache_cap > 0 and s.ecount[key] >= 2:
             w16 = w.astype(np.float16)
             while s.ecache_bytes + w16.nbytes > s.ecache_cap and s.ecache:
                 k0 = min(s.ecache, key=lambda k: s.ecount[k])
