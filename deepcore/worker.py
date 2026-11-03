@@ -132,7 +132,7 @@ def op_run(env, job_id, shift_minutes=20, shift_tokens=64, max_shifts=1, log=_lo
             if t_first is None:
                 t_first = time.time() - t_decode0
             batch.append(nid)
-            if len(batch) >= 8:
+            if len(batch) >= 16:  # coalesce commits: fewer uploads under secondary limits
                 regs.put(f"run/{job_id}/tok/{seq:04d}", {"ids": batch})
                 seq += 1
                 batch = []

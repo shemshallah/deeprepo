@@ -88,7 +88,7 @@ def _manifest(journal):
     return json.loads(journal.get(ms[-1][0])) if ms else None
 
 
-class TierStore(ram16.GitHubStore):
+class TierStore(RetryStore):
     """GitHubStore whose asset() returns a SparseAsset (missing/trimmed bins read as zeros).
     This keeps ram16.Ram16's own manifest adoption and compaction-swap logic intact."""
 
@@ -113,7 +113,29 @@ class TierStore(ram16.GitHubStore):
         return s._wrap(name)
 
 
-class Journal(ram16.GitHubJournal):
+def _gh_retry(fn, self, *a, **k):
+    """429/403-secondary/5xx backoff with Retry-After and jitter (release uploads are the
+    expensive path; a burst otherwise gets a 10-minute secondary-limit 403)."""
+    import random
+    for attempt in range(6):
+        try:
+            return fn(self, *a, **k)
+        except urllib.error.HTTPError as e:
+            retryable = e.code in (403, 429) or 500 <= e.code < 600
+            if not retryable or attempt == 5:
+                raise
+            ra = e.headers.get("Retry-After") if e.headers else None
+            wait = float(ra) if ra else min(60.0, (2 ** attempt) * 1.5 + random.random())
+            time.sleep(wait)
+    raise IOError("retries exhausted")
+
+
+class RetryStore(ram16.GitHubStore):
+    def _req(s, url, data=None, ctype=None, method=None, length=None):
+        return _gh_retry(ram16.GitHubStore._req, s, url, data, ctype, method, length)
+
+
+class Journal(RetryStore):
     """Delta/manifest journal that can be missing (empty tier) and creates itself on first write."""
 
     def _create(s):
