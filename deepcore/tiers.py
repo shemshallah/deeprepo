@@ -136,6 +136,22 @@ def _bin_used_extent(b, weight_pages, pps=PPS):
     return lo, hi
 
 
+def _remove_blob(store, name):
+    try:
+        if hasattr(store, "_assets"):
+            store._assets()
+            if name in store._ix:
+                store.delete(name)
+                return True
+        elif hasattr(store, "size"):
+            if store.size(name) is not None:
+                store.delete(name)
+                return True
+    except Exception:
+        pass
+    return False
+
+
 def import_model(vram_store, jstore, hf, budget=None, resume=True, work="/tmp", log=print):
     """Stream the GGUF from HF and tile it into repovram bins, one bin on disk at a time.
     Bin b holds vram pages [max(1,b*PPS), min(wp+1,(b+1)*PPS)); source bytes for page p
@@ -204,7 +220,8 @@ def import_model(vram_store, jstore, hf, budget=None, resume=True, work="/tmp", 
         if budget:
             budget.record("down", payload)
             budget.record("up", size)
-        log(f"import: {name} {size/2**20:.0f} MiB streamed+uploaded in {time.time()-t0:.0f}s")
+        log(f"import: {name} {size/2**20:.0f} MiB streamed in {time.time()-t0:.0f}s; uploading")
+        _remove_blob(vram_store, name)  # release assets must be unique (bin-0 replaces bootstrap)
         vram_store.put_file(name, path)
         os.remove(path)
         bins_done.add(b)
