@@ -115,15 +115,18 @@ class Qwen3MoE:
         return (x @ w.astype(np.float32).T) if x.ndim == 2 else x @ w.astype(np.float32).T
 
     def _expert(s, layer, nm, e):
-        """Dequantize one expert slice of a merged 3-D tensor, paged straight from repovram."""
+        """Dequantize one expert slice of a merged 3-D tensor, paged straight from repovram.
+        Slice size is derived from THIS tensor (Q4_K_M mixes Q4_K/Q6_K per layer)."""
         t = s.g.tensors[f"blk.{layer}.{nm}.weight"]
-        off, n = e * s.expert_bytes[nm], s.expert_bytes[nm]
+        ne_t = int(t.dims[-1])                      # expert count on the last axis
+        per = t.nbytes // ne_t                      # contiguous expert slice
+        off, n = e * per, per
         s.st["expert_slice_reads"] += 1
         s.st["expert_bytes"] += n
         s.st["vram_bytes"] += n
         w = G.dequant(s.g.read_range(f"blk.{layer}.{nm}.weight", off, n), t.type)
-        rows = t.dims[1]  # per-expert out dim (gate/up: n_ff; down: n_embd)
-        return w.reshape(int(rows), int(t.dims[0]))
+        rows = int(t.dims[1])                       # gate/up: n_ff; down: n_embd
+        return w.reshape(rows, int(t.dims[0]))
 
     def _load_head(s):
         """Dequantize the output (lm) head into f16 in bounded chunks: no 1.2 GiB f32 transient."""

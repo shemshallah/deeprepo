@@ -106,8 +106,48 @@ def _gh_retry(fn, self, *a, **k):
 
 
 class RetryStore(ram16.GitHubStore):
+    """GitHub API with jittered backoff and ETag revalidation.
+
+    Conditional GETs answered 304 do not count against the rate limit, so polling the
+    journal/manifest repeatedly becomes nearly free instead of ~2 calls per poll."""
+
+    def __init__(s, *a, **k):
+        super().__init__(*a, **k)
+        s._hc = {}
+
     def _req(s, url, data=None, ctype=None, method=None, length=None):
-        return _gh_retry(ram16.GitHubStore._req, s, url, data, ctype, method, length)
+        import random
+        is_get = method is None or method == "GET"
+        cached = s._hc.get(url) if is_get else None
+        h = {"Accept": "application/vnd.github+json", "User-Agent": "deeprepo"}
+        if s.token:
+            h["Authorization"] = f"Bearer {s.token}"
+        if ctype:
+            h["Content-Type"] = ctype
+        if length is not None:
+            h["Content-Length"] = str(length)
+        if cached:
+            h["If-None-Match"] = cached[0]
+        for attempt in range(6):
+            try:
+                with urllib.request.urlopen(urllib.request.Request(url, data=data, headers=h, method=method),
+                                            timeout=120) as r:
+                    body = r.read()
+                    if is_get:
+                        et = r.headers.get("ETag")
+                        if et:
+                            s._hc[url] = (et, body)
+                    return json.loads(body) if body else None
+            except urllib.error.HTTPError as e:
+                if e.code == 304 and cached:
+                    return json.loads(cached[1]) if cached[1] else None
+                retryable = e.code in (403, 429) or 500 <= e.code < 600
+                if not retryable or attempt == 5:
+                    raise
+                ra = e.headers.get("Retry-After") if e.headers else None
+                wait = float(ra) if ra else min(60.0, (2 ** attempt) * 1.5 + random.random())
+                time.sleep(wait)
+        raise IOError("retries exhausted")
 
 
 class TierStore(RetryStore):
