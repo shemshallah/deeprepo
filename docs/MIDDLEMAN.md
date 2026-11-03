@@ -120,6 +120,47 @@ transcript is recorded.
 | VPS / Raspberry Pi + tunnel | yes | cheapest at scale, you own backups/TLS |
 | self-hosted runner | yes | run it beside the runner; use `DEEPREPO_TIER_DIR` for the full local tier instead |
 
+## Deploy on Koyeb (recommended control plane)
+
+Koyeb is a good home for the **keeper** (stateless, needs a PAT, outbound HTTPS) and, if your
+plan includes a persistent volume, for the reporam hot tier as well.
+
+**Option A — build from GitHub (simplest):** Koyeb dashboard → Create Service → GitHub →
+`shemshallah/deeprepo`, builder = Dockerfile, port `8080`. Environment:
+
+```
+MIDDLE_TOKEN   = <cat ~/.deeprepo-secrets/middle_token>
+GH_TOKEN       = <your PAT>            # only for the keeper service
+DEEPREPO_RAM   = shemshallah/reporam
+DEEPREPO_VRAM  = shemshallah/repovram
+DEEPREPO_MAIN  = shemshallah/deeprepo
+```
+
+For the **keeper**, override the run command:
+
+```
+python -m deepcore keeper --loop --interval 600
+```
+
+For the **store**, keep the default command (`python -m deepcore.middle serve --root /data --port 8080`)
+and attach a volume at `/data` if your plan supports it. Without a volume the store is
+ephemeral (fine for testing, not for reporam).
+
+**Option B — image from GHCR:** run workflow `06 middle image`, then create a Koyeb service
+from `ghcr.io/shemshallah/deeprepo-middle:latest`. Make the package public in GitHub →
+Packages, or add a Koyeb registry credential (a PAT with `read:packages`).
+
+After deploy:
+
+1. Set `MIDDLE_URL=https://<service>.koyeb.app` as a repository **variable** in `deeprepo`
+   and all five cpu repos.
+2. To put reporam on it: set variable `RAM_BACKEND=middle` everywhere, then re-run
+   `00-bootstrap` (fresh middleman store) and `05-serve`. Keep `VRAM_BACKEND=github`.
+3. If the keeper runs on Koyeb, disable the GitHub `keeper` workflow schedule.
+
+Note: Koyeb's free instance has no persistent volume; use it for the keeper, keep reporam on
+GitHub releases (default), or move the tier to a volume-enabled instance.
+
 ## Deploy (Fly example)
 
 ```bash
