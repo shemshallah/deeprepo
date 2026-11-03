@@ -34,11 +34,13 @@ class Coordinator:
     def prewarm(s, repo, timeout=1500, op="prewarm"):
         s.log(f"{op} {repo} ...")
         try:
+            base = ring.last_run(repo, "runner.yml", s.token)
+            base_id = base["id"] if base else None
             s._dispatch(repo, op)
         except Exception as e:
             s.log(f"dispatch failed for {repo}: {e!r}")
             return False
-        c = ring.await_run(repo, "runner.yml", s.token, timeout=timeout, poll=15)
+        c = ring.await_run(repo, "runner.yml", s.token, timeout=timeout, poll=15, base_id=base_id)
         ok = c == "success"
         s.health[repo] = {"ok": ok, "t": int(time.time()), "conclusion": c, "mode": op}
         s.status.update(s.env, runner=repo, phase=f"{op} {'ok' if ok else 'failed'}")

@@ -91,11 +91,14 @@ def last_run(repo, workflow, token):
     return (js.get("workflow_runs") or [None])[0]
 
 
-def await_run(repo, workflow, token, timeout=1500, poll=15, log=print):
-    """Wait for the newest run of a workflow to finish; returns conclusion or None."""
+def await_run(repo, workflow, token, timeout=1500, poll=15, log=print, base_id=None):
+    """Wait for a run newer than base_id to finish; returns conclusion or None.
+    Callers must capture base_id BEFORE dispatching, otherwise the dispatched run can
+    become the baseline and the wait never ends."""
     t0 = time.time()
-    base = last_run(repo, workflow, token)
-    base_id = base["id"] if base else None
+    if base_id is None:
+        base = last_run(repo, workflow, token)
+        base_id = base["id"] if base else None
     while time.time() - t0 < timeout:
         time.sleep(poll)
         run = last_run(repo, workflow, token)
