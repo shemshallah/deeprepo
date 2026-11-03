@@ -40,9 +40,10 @@ def op_prewarm(env, minutes_headstart=90):
                 t = g.tensors[key]
                 env.vram.prefetch(t.addr, t.nbytes)
                 warm_bytes += t.nbytes
-    _log(f"prewarm: warmed ~{warm_bytes/2**20:.0f} MiB in {time.time()-t0:.0f}s; ready")
+    total = time.time() - t0
+    _log(f"prewarm: warmed ~{warm_bytes/2**20:.0f} MiB in {total:.0f}s; ready")
     env.ram.refresh()
-    return {"ok": True, "warm_bytes": warm_bytes, "secs": round(time.time() - t0, 1)}
+    return {"ok": True, "warm_bytes": warm_bytes, "secs": round(total, 1)}
 
 
 def op_run(env, job_id, shift_minutes=20, shift_tokens=64, max_shifts=1, log=_log):
@@ -83,6 +84,7 @@ def op_run(env, job_id, shift_minutes=20, shift_tokens=64, max_shifts=1, log=_lo
         log(f"run: prompt truncated to {len(prompt_ids)} tokens to fit the KV region ({eng.ctx})")
     pos_prompt = len(prompt_ids)
     log(f"run: job {job_id} epoch {lease['epoch']} prompt {pos_prompt} prev {made} target {max_new}")
+    t_prefill0 = time.time()
     if made == 0:
         # fresh job: chunked prefill of the whole prompt
         last_logits = None
@@ -96,10 +98,13 @@ def op_run(env, job_id, shift_minutes=20, shift_tokens=64, max_shifts=1, log=_lo
         # continue: re-encode the last generated token (idempotent KV write) to get its logits
         last_logits = eng.forward([prev[-1]], pos_prompt + made - 1)
 
+    t_prefill = time.time() - t_prefill0
     EOS = tok.special.get(tok.IM_END)
     # continue the chunk sequence across shifts: keys must be globally unique per job
     seq = len(regs.keys(f"run/{job_id}/tok/"))
     tokens, batch, done = [], [], False
+    t_decode0 = time.time()
+    t_first = None
     encoded = made  # how many generated tokens have KV + logits computed
     # WRITER RESIDENCY: one job keeps the lease across several internal shifts so its page
     # cache stays warm; only checkpoint deltas + informational handoff packets. The ring
@@ -124,6 +129,8 @@ def op_run(env, job_id, shift_minutes=20, shift_tokens=64, max_shifts=1, log=_lo
             tokens.append(nid)
             made += 1
             made_shift += 1
+            if t_first is None:
+                t_first = time.time() - t_decode0
             batch.append(nid)
             if len(batch) >= 8:
                 regs.put(f"run/{job_id}/tok/{seq:04d}", {"ids": batch})
@@ -154,6 +161,10 @@ def op_run(env, job_id, shift_minutes=20, shift_tokens=64, max_shifts=1, log=_lo
     env.persist_budget()
     st = eng.stats()
     st["shift_secs"] = round(time.time() - t0, 1)
+    st["prefill_secs"] = round(t_prefill, 1)
+    st["decode_secs"] = round(time.time() - t_decode0, 1)
+    st["first_token_secs"] = round(t_first, 1) if t_first is not None else None
+    st["tok_per_s"] = round(max(0, made - made_start) / max(1e-6, st["decode_secs"]), 3)
     if done:
         regs.put(f"run/{job_id}/done", {"tokens": made, "stats": st})
         ring.Lease.free(regs, runner)

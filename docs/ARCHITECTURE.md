@@ -96,6 +96,30 @@ compaction primitives, RegionLog, and the GitHub-issue chat queue.
 - Sparsity: the tiny model materializes **1 of 16** vram bins (`test_sparse_bins_are_absent`).
 - Compaction: trimmed bins + manifest rehydration verified (`test_handoff_and_compaction`).
 
+## Timing budget
+
+Import (materializing the 9 weight bins) is **one-time provisioning**, not part of boot or
+handoff. Measured on the default Qwen3-30B-A3B Q4_K_M import: ~40 min for 17.3 GiB
+(stream 18.6 GiB from HF while uploading one bin at a time). It never repeats unless the
+model/quant changes.
+
+Steady-state costs (logged per run: `prewarm.secs`, `prefill_secs`, `first_token_secs`,
+`decode_secs`, `tok_per_s`, `shift_secs`):
+
+| phase | cadence | cost |
+|---|---|---|
+| prewarm/hydration | each handoff | 30–90 s (verify tiers, ~128 MiB hot pages) |
+| cold shift start | each job | 20–60 s to page attention/router/head (~1–2 GiB) |
+| prefill | each prompt | seconds (short) to minutes (2k tokens touches all experts) |
+| decode | per token | 3–12 s depending on expert-cache luck |
+| handoff | each rotation | 20–60 s (KV is already in reporam; no weight transfer) |
+| compaction | between shifts, lease-free | ~30–60 s per 2 GiB dirty bin upload |
+
+The keeper dispatch cadence (20 min) and the coordinator's 6 s journal poll dominate
+control-plane latency, not the tiers. Tune shift length (`--shift-tokens`,
+`--max-shifts`) to amortize cold starts: a resident writer does up to 4 internal shifts
+(~128 tokens) per job before the ring rotates.
+
 ## What this is not
 
 - Not realtime: one decode token costs a network+paging+compute path measured in seconds.
