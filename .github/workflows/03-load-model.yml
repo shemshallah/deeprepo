@@ -33,6 +33,9 @@ env:
   DEEPREPO_MIDDLE_URL: ${{ vars.MIDDLE_URL }}
   DEEPREPO_MIDDLE_TOKEN: ${{ secrets.MIDDLE_TOKEN }}
 
+env:
+  PYTHONUNBUFFERED: "1"
+
 jobs:
   load:
     runs-on: ubuntu-latest
