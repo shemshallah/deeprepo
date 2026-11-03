@@ -51,6 +51,21 @@ def _has_blob(store, name):
     return False
 
 
+def ensure_journals(vram_repo, ram_repo, backend, token, middle_url="", middle_token=""):
+    """Create the journal releases (reporam-j / repovram-j) for GitHub-backed tiers."""
+    if backend == "middle":
+        return
+    from .store import Journal
+    for repo, tag in ((ram_repo, "reporam-j"), (vram_repo, "repovram-j")):
+        j = Journal(repo, token, tag)
+        try:
+            j._rel()
+        except Exception:
+            j._create()
+            log_ = print
+            log_(f"journal release created: {repo}:{tag}")
+
+
 def bootstrap(vram_store, ram_store, kv_pages=1024, reg_pages=256, force=False, log=print):
     """Create releases + bin-0 superblocks on both tier repos. Idempotent."""
     out = {}

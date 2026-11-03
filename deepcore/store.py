@@ -113,11 +113,57 @@ class TierStore(ram16.GitHubStore):
         return s._wrap(name)
 
 
+class Journal(ram16.GitHubJournal):
+    """Delta/manifest journal that can be missing (empty tier) and creates itself on first write."""
+
+    def _create(s):
+        import json as _json
+        r = s._req(f"https://api.github.com/repos/{s.repo}/releases",
+                   _json.dumps({"tag_name": s.tag, "name": s.tag, "body": "deeprepo journal",
+                                "draft": False, "prerelease": True}).encode(),
+                   "application/json", "POST")
+        s._rid = r["id"]
+
+    def list(s, pat=ram16.DELTA):
+        try:
+            return super().list(pat)
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                return []
+            raise
+
+    def get(s, n):
+        try:
+            return super().get(n)
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                raise KeyError(n)
+            raise
+
+    def put(s, n, data):
+        try:
+            return super().put(n, data)
+        except urllib.error.HTTPError as e:
+            if e.code != 404:
+                raise
+        s._create()
+        return super().put(n, data)
+
+    def delete(s, n):
+        try:
+            return super().delete(n)
+        except urllib.error.HTTPError as e:
+            if e.code != 404:
+                raise
+
+
 def open_store(repo, tag, backend="github", token="", middle_url="", middle_token=""):
     """Return a GitHub release store or a middleman store for one blob namespace."""
     if backend == "middle":
         from .middle import MiddleStore
         return MiddleStore(middle_url, middle_token, prefix=f"{repo}/{tag}")
+    if tag.endswith("-j"):
+        return Journal(repo, token, tag)
     return ram16.GitHubStore(repo, token, tag)
 
 
@@ -143,7 +189,7 @@ def connect_tier(repo, tag, token, journal_tag=None, cache_pages=256, disk_cache
         journal = open_store(repo, journal_tag, backend, token, middle_url, middle_token) if journal_tag else None
     else:
         tier_store = TierStore(repo, token, tag, geom, disk_cache=disk_cache)
-        journal = ram16.GitHubJournal(repo, token, journal_tag) if journal_tag else None
+        journal = Journal(repo, token, journal_tag) if journal_tag else None
     far = None
     ram = ram16.Ram16(None, journal=journal, store=tier_store, nslots=geom["ns"], cache_pages=cache_pages, **kw)
     ram.tier_geom, ram.tier_store = geom, tier_store

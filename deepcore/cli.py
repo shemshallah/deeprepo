@@ -46,7 +46,12 @@ def cmd_bootstrap(argv):
     ram_repo = os.environ.get("DEEPREPO_RAM", "reporam")
     vram_repo = os.environ.get("DEEPREPO_VRAM", "repovram")
     from .store import open_store
+    from .tiers import ensure_journals
     murl, mtok = os.environ.get("DEEPREPO_MIDDLE_URL", ""), os.environ.get("DEEPREPO_MIDDLE_TOKEN", "")
+    ram_backend = os.environ.get("DEEPREPO_RAM_BACKEND", "github")
+    vram_backend = os.environ.get("DEEPREPO_VRAM_BACKEND", "github")
+    ensure_journals(vram_repo, ram_repo, ram_backend, token, murl, mtok)
+    ensure_journals(vram_repo, ram_repo, vram_backend, token, murl, mtok)
     out = bootstrap(open_store(vram_repo, TAG_VRAM, os.environ.get("DEEPREPO_VRAM_BACKEND", "github"), token, murl, mtok),
                     open_store(ram_repo, TAG_RAM, os.environ.get("DEEPREPO_RAM_BACKEND", "github"), token, murl, mtok),
                     kv_pages=kv_pages, reg_pages=reg_pages, force="--force" in argv)
