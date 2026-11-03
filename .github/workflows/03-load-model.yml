@@ -28,13 +28,11 @@ env:
   DEEPREPO_RAM: ${{ vars.REPORAM_REPO || format('{0}/reporam', github.repository_owner) }}
   DEEPREPO_VRAM: ${{ vars.REPOVRAM_REPO || format('{0}/repovram', github.repository_owner) }}
   DEEPREPO_MAIN: ${{ github.repository }}
+  PYTHONUNBUFFERED: "1"
   DEEPREPO_RAM_BACKEND: ${{ vars.RAM_BACKEND || 'github' }}
   DEEPREPO_VRAM_BACKEND: ${{ vars.VRAM_BACKEND || 'github' }}
   DEEPREPO_MIDDLE_URL: ${{ vars.MIDDLE_URL }}
   DEEPREPO_MIDDLE_TOKEN: ${{ secrets.MIDDLE_TOKEN }}
-
-env:
-  PYTHONUNBUFFERED: "1"
 
 jobs:
   load:
