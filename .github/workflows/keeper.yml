@@ -1,0 +1,59 @@
+name: keeper
+# 24/7 guard: budget check, lease-aware restart, journal compaction, and a restart of the
+# serve loop when the model + gate are ready. Never fights an active serve run.
+on:
+  schedule:
+    - cron: "*/20 * * * *"
+  workflow_dispatch:
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency: keeper
+
+env:
+  GH_TOKEN: ${{ secrets.DEEPREPO_PAT }}
+  DEEPREPO_RAM: ${{ vars.REPORAM_REPO || format('{0}/reporam', github.repository_owner) }}
+  DEEPREPO_VRAM: ${{ vars.REPOVRAM_REPO || format('{0}/repovram', github.repository_owner) }}
+  DEEPREPO_MAIN: ${{ github.repository }}
+  DEEPREPO_RAM_BACKEND: ${{ vars.RAM_BACKEND || 'github' }}
+  DEEPREPO_VRAM_BACKEND: ${{ vars.VRAM_BACKEND || 'github' }}
+  DEEPREPO_MIDDLE_URL: ${{ vars.MIDDLE_URL }}
+  DEEPREPO_MIDDLE_TOKEN: ${{ secrets.MIDDLE_TOKEN }}
+
+jobs:
+  keeper:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements-core.txt
+
+      - name: Skip if a serve window is already running
+        id: busy
+        env:
+          PAT: ${{ secrets.DEEPREPO_PAT }}
+        run: |
+          n=$(curl -s -H "Authorization: Bearer $PAT" \
+            "https://api.github.com/repos/$DEEPREPO_MAIN/actions/workflows/05-serve.yml/runs?status=in_progress&per_page=1" \
+            | python -c "import json,sys; print(len(json.load(sys.stdin).get('workflow_runs', [])))")
+          echo "in_progress=$n" >> "$GITHUB_OUTPUT"
+          [ "$n" = "0" ] || echo "serve is running; keeper will only compact if idle"
+
+      - name: Keeper pass
+        if: ${{ steps.busy.outputs.in_progress == '0' }}
+        run: python -m deepcore keeper | tee keeper.json
+
+      - name: Summary
+        run: |
+          {
+            echo "## Keeper"
+            echo '```json'
+            cat keeper.json 2>/dev/null || echo '(serve already running)'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

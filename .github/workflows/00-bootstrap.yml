@@ -1,0 +1,85 @@
+name: 00 bootstrap tiers
+# Creates the releases + bin-0 superblocks on reporam/repovram and the budget caps.
+# Everything runs on the GitHub runner: the phone never holds tier data.
+on:
+  workflow_dispatch:
+    inputs:
+      force:
+        description: Re-forge bin-0 (destroys the register superblock)
+        type: boolean
+        default: false
+      kv_pages:
+        description: KV region pages (4 MiB each) in reporam
+        type: string
+        default: "1024"
+      reg_pages:
+        description: Register region pages (4 MiB each) in reporam
+        type: string
+        default: "256"
+
+permissions:
+  contents: write
+
+concurrency: bootstrap
+
+env:
+  GH_TOKEN: ${{ secrets.DEEPREPO_PAT }}
+  DEEPREPO_RAM: ${{ vars.REPORAM_REPO || format('{0}/reporam', github.repository_owner) }}
+  DEEPREPO_VRAM: ${{ vars.REPOVRAM_REPO || format('{0}/repovram', github.repository_owner) }}
+  DEEPREPO_MAIN: ${{ github.repository }}
+  DEEPREPO_RAM_BACKEND: ${{ vars.RAM_BACKEND || 'github' }}
+  DEEPREPO_VRAM_BACKEND: ${{ vars.VRAM_BACKEND || 'github' }}
+  DEEPREPO_MIDDLE_URL: ${{ vars.MIDDLE_URL }}
+  DEEPREPO_MIDDLE_TOKEN: ${{ secrets.MIDDLE_TOKEN }}
+
+jobs:
+  bootstrap:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements-core.txt
+
+      - name: Preflight (PAT + tier repos)
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error::Missing secret DEEPREPO_PAT (classic: repo+workflow; fine-grained: contents RW on deeprepo/reporam/repovram, actions RW on deeprepo-cpu-1..5)."
+            exit 1
+          fi
+          for r in "$DEEPREPO_RAM" "$DEEPREPO_VRAM"; do
+            gh api "repos/$r" >/dev/null || { echo "::error::repo $r not found or PAT cannot see it"; exit 1; }
+          done
+          echo "reporam=$DEEPREPO_RAM repovram=$DEEPREPO_VRAM ok"
+
+      - name: Forge tier superblocks
+        run: |
+          python -m deepcore bootstrap \
+            --kv-pages "${{ inputs.kv_pages }}" --reg-pages "${{ inputs.reg_pages }}" \
+            ${{ inputs.force && '--force' || '' }} | tee out.json
+
+      - name: Record geometry in run summary
+        run: |
+          python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json, sys
+          from deepcore import BINS, PPS, PAGE
+          print("## Sparse tier geometry")
+          print(f"- bins per tier: **{BINS}** x 1.99 GiB")
+          print(f"- pages per bin: {PPS} x 4 MiB; tier virtual: **{BINS*PPS*PAGE/2**30:.2f} GiB**")
+          print("- repovram: weights (read-only, sparse)")
+          print("- reporam: KV + registers (journal writes, generation compaction)")
+          PY
+
+      - name: Commit register map (metadata only)
+        run: |
+          mkdir -p state
+          cat > state/tiers.json <<EOF
+          {"reporam": "$DEEPREPO_RAM", "repovram": "$DEEPREPO_VRAM", "page": 4194304, "pps": 510, "bins": 16}
+          EOF
+          git config user.name deeprepo-bot
+          git config user.email bot@deeprepo.local
+          git add state/tiers.json && git commit -m "bootstrap: tier map" || true
+          git push || true

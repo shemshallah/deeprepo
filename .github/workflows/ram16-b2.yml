@@ -114,7 +114,6 @@ jobs:
       - name: Initialize B2 memory register
         if: inputs.command == 'init'
         env:
-          RAM16_COORDINATOR_REPO: ${{ vars.RAM16_COORDINATOR_REPO || github.repository }}
           B2_KEY_ID: ${{ secrets.B2_KEY_ID }}
           B2_APPLICATION_KEY: ${{ secrets.B2_APPLICATION_KEY }}
           B2_BUCKET: ${{ secrets.B2_BUCKET }}
@@ -123,7 +122,6 @@ jobs:
       - name: Inspect memory and model layout
         if: inputs.command == 'status'
         env:
-          RAM16_COORDINATOR_REPO: ${{ vars.RAM16_COORDINATOR_REPO || github.repository }}
           B2_KEY_ID: ${{ secrets.B2_KEY_ID }}
           B2_APPLICATION_KEY: ${{ secrets.B2_APPLICATION_KEY }}
           B2_BUCKET: ${{ secrets.B2_BUCKET }}
@@ -132,7 +130,6 @@ jobs:
       - name: Stream GGUF into B2-backed virtual memory
         if: inputs.command == 'format-url'
         env:
-          RAM16_COORDINATOR_REPO: ${{ vars.RAM16_COORDINATOR_REPO || github.repository }}
           B2_KEY_ID: ${{ secrets.B2_KEY_ID }}
           B2_APPLICATION_KEY: ${{ secrets.B2_APPLICATION_KEY }}
           B2_BUCKET: ${{ secrets.B2_BUCKET }}
@@ -149,7 +146,6 @@ jobs:
       - name: Run the original GGUF issue-chat agent
         if: inputs.command == 'serve'
         env:
-          RAM16_COORDINATOR_REPO: ${{ vars.RAM16_COORDINATOR_REPO || github.repository }}
           B2_KEY_ID: ${{ secrets.B2_KEY_ID }}
           B2_APPLICATION_KEY: ${{ secrets.B2_APPLICATION_KEY }}
           B2_BUCKET: ${{ secrets.B2_BUCKET }}
@@ -188,7 +184,6 @@ jobs:
       - name: Commit staged pages
         if: inputs.command == 'commit'
         env:
-          RAM16_COORDINATOR_REPO: ${{ vars.RAM16_COORDINATOR_REPO || github.repository }}
           B2_KEY_ID: ${{ secrets.B2_KEY_ID }}
           B2_APPLICATION_KEY: ${{ secrets.B2_APPLICATION_KEY }}
           B2_BUCKET: ${{ secrets.B2_BUCKET }}
@@ -198,7 +193,6 @@ jobs:
       - name: Garbage-collect unreachable B2 objects (dry-run by default)
         if: inputs.command == 'gc'
         env:
-          RAM16_COORDINATOR_REPO: ${{ vars.RAM16_COORDINATOR_REPO || github.repository }}
           B2_KEY_ID: ${{ secrets.B2_KEY_ID }}
           B2_APPLICATION_KEY: ${{ secrets.B2_APPLICATION_KEY }}
           B2_BUCKET: ${{ secrets.B2_BUCKET }}

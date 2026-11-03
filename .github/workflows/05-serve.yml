@@ -1,0 +1,79 @@
+name: 05 serve
+# The 24/7 chat loop. Reads issue comments labelled deeprepo-chat, tokenizes, and drives
+# the ring: prewarm next runner -> lease -> dispatch run -> stream -> handoff. Stops on
+# budget exhaustion and hands itself off (or lets the keeper restart it).
+on:
+  workflow_dispatch:
+    inputs:
+      minutes:
+        description: wall-clock minutes for this serve window
+        type: string
+        default: "300"
+      loop:
+        description: re-dispatch a new serve window when this one ends cleanly
+        type: boolean
+        default: true
+
+permissions:
+  actions: write
+  contents: read
+  issues: write
+
+concurrency:
+  group: serve
+  cancel-in-progress: false
+
+env:
+  GH_TOKEN: ${{ secrets.DEEPREPO_PAT }}
+  DEEPREPO_RAM: ${{ vars.REPORAM_REPO || format('{0}/reporam', github.repository_owner) }}
+  DEEPREPO_VRAM: ${{ vars.REPOVRAM_REPO || format('{0}/repovram', github.repository_owner) }}
+  DEEPREPO_MAIN: ${{ github.repository }}
+  DEEPREPO_RAM_BACKEND: ${{ vars.RAM_BACKEND || 'github' }}
+  DEEPREPO_VRAM_BACKEND: ${{ vars.VRAM_BACKEND || 'github' }}
+  DEEPREPO_MIDDLE_URL: ${{ vars.MIDDLE_URL }}
+  DEEPREPO_MIDDLE_TOKEN: ${{ secrets.MIDDLE_TOKEN }}
+
+jobs:
+  serve:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements-core.txt
+
+      - name: Preflight (model + gate + budget)
+        run: |
+          [ -n "$GH_TOKEN" ] || { echo "::error::Missing DEEPREPO_PAT"; exit 1; }
+          python -m deepcore status | tee status.txt
+          grep -q '"ready": true' status.txt || { echo "::error::no model loaded"; exit 1; }
+          grep -q '"ok": true' status.txt || { echo "::error::single-runner gate not passed (run 04-boot-single)"; exit 1; }
+
+      - name: Serve
+        id: serve
+        run: |
+          set -o pipefail
+          python -m deepcore serve --minutes "${{ inputs.minutes }}" | tee serve.log
+          if grep -q BUDGET_EXHAUSTED serve.log; then
+            echo "exhausted=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "exhausted=0" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Hand off a fresh window
+        if: ${{ inputs.loop && steps.serve.outputs.exhausted == '0' && success() }}
+        run: |
+          gh workflow run 05-serve.yml -f minutes="${{ inputs.minutes }}" -f loop=true
+          echo "next serve window dispatched"
+
+      - name: Summary
+        run: |
+          {
+            echo "## Serve window"
+            echo '```'
+            tail -50 serve.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

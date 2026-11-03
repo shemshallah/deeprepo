@@ -1,0 +1,74 @@
+name: 03 load model
+# Streams a GGUF from Hugging Face and tiles it into repovram release bins, one bin at a
+# time, resumable. The model never touches the local phone: only this runner's disk ever
+# holds a single <=2 GiB bin, then it is uploaded and deleted.
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: GGUF URL (Hugging Face resolve link; Content-Length + Range required)
+        type: string
+        default: https://huggingface.co/Qwen/Qwen3-30B-A3B-Instruct-2507-GGUF/resolve/main/Qwen3-30B-A3B-Instruct-2507-Q4_K_M.gguf
+      key:
+        description: Model key recorded in the registers
+        type: string
+        default: qwen3-30b-a3b-instruct-2507-q4_k_m
+      fresh:
+        description: Ignore previous import progress (re-upload all bins)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency: load-model
+
+env:
+  GH_TOKEN: ${{ secrets.DEEPREPO_PAT }}
+  DEEPREPO_RAM: ${{ vars.REPORAM_REPO || format('{0}/reporam', github.repository_owner) }}
+  DEEPREPO_VRAM: ${{ vars.REPOVRAM_REPO || format('{0}/repovram', github.repository_owner) }}
+  DEEPREPO_MAIN: ${{ github.repository }}
+  DEEPREPO_RAM_BACKEND: ${{ vars.RAM_BACKEND || 'github' }}
+  DEEPREPO_VRAM_BACKEND: ${{ vars.VRAM_BACKEND || 'github' }}
+  DEEPREPO_MIDDLE_URL: ${{ vars.MIDDLE_URL }}
+  DEEPREPO_MIDDLE_TOKEN: ${{ secrets.MIDDLE_TOKEN }}
+
+jobs:
+  load:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements-core.txt
+
+      - name: Preflight
+        run: |
+          [ -n "$GH_TOKEN" ] || { echo "::error::Missing DEEPREPO_PAT"; exit 1; }
+          df -h / | tail -1
+          free -g | head -2
+          python -m deepcore status || { echo "::error::tiers not bootstrapped (run 00-bootstrap)"; exit 1; }
+
+      - name: Stream + tile GGUF into repovram
+        env:
+          MODEL_URL: ${{ inputs.url }}
+          MODEL_KEY: ${{ inputs.key }}
+        run: |
+          set -o pipefail
+          python -m deepcore load-model --url "$MODEL_URL" --key "$MODEL_KEY" ${{ inputs.fresh && '--fresh' || '' }} | tee load.json
+
+      - name: Verify + summary
+        run: |
+          python -m deepcore status | tee status.txt
+          {
+            echo "## Model loaded into repovram"
+            echo '```json'
+            cat load.json
+            echo '```'
+            echo '```'
+            cat status.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

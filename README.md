@@ -1,108 +1,126 @@
-# RAM16 GGUF runner + sparse 32-GiB Backblaze B2 memory
+# deeprepo — a 30B MoE running on repo-backed sparse RAM/VRAM
 
-This package keeps the original `ram16.py` model/GGUF parser, `Machine`, KV and persistent `RegionLog` memory, GitHub Issues queue, and inference loop. `ram16_b2.py` supplies the B2-backed byte-addressable store.
+deeprepo runs **Qwen3-30B-A3B-Instruct-2507 (Q4_K_M, ~18.6 GiB)** on a ring of
+GitHub-hosted runners that individually cannot hold it: a standard runner has **7 GiB RAM**
+and **14 GB disk**. The model deliberately does not fit. Its weights live in **repovram**
+and its KV cache in **reporam** — two sparse virtual memory tiers backed by GitHub release
+bins, read and written page-by-page (4 MiB) over HTTP Range.
 
-## Architecture
-
-- **GitHub Actions:** disposable CPU runner and the single writer coordinator.
-- **Backblaze B2:** persistent compressed page objects, immutable generation manifests, and the current-generation register.
-- **GitHub Issues:** chat/session queue (`ram16-chat` label by default).
-- **Virtual address space:** 32 GiB, 4 MiB pages (8,192 pages). Unwritten pages are implicit zeroes. Nonzero pages are zlib-compressed and content-addressed.
-- **Original RAM16 layout:** page 0 superblock; GGUF weights; KV spill region; persistent memory region, calculated by `ram16.plan_layout()`.
-
-This is **sparse virtual storage**, not 32 GiB of physical RAM or VRAM. A 32-GiB incompressible image cannot fit in a less-than-10-GB object-storage allowance. The default safety cap is 9,500,000,000 bytes for visible objects under `ram16/pages/`; it does not account for unrelated bucket data. Use a dedicated bucket/prefix and keep quota headroom.
-
-## Configure GitHub
-
-Create these repository secrets (never commit credentials):
-
-- `B2_KEY_ID` — Backblaze application key ID
-- `B2_APPLICATION_KEY` — application key secret
-- `B2_BUCKET` — bucket name
-- `B2_ENDPOINT` — region-specific S3 endpoint, e.g. `https://s3.us-west-004.backblazeb2.com`
-
-The main application key needs read/list/write permissions for normal operation. For tighter isolation, optionally create `B2_READ_KEY_ID` and `B2_READ_APPLICATION_KEY` secrets for a bucket-restricted, read-only key used only by the native GGUF mount. The mount falls back to the main key if these are absent. To run garbage collection with `--apply`, the main key also needs permission to delete objects and list object versions.
-
-The workflow automatically sets `RAM16_COORDINATOR_REPO` to `${{ github.repository }}`. Your repository named `deeprepo` is therefore the canonical coordinator; no manually configured coordinator variable is needed. All B2-mutating workflow runs should be dispatched from this repository. GitHub Actions concurrency groups are repository-scoped, so this repository serializes cooperating writers. Other repositories should dispatch this repository's workflow rather than writing to B2 directly. This is cooperative coordination, not a storage-provider atomic compare-and-swap; do not give the same B2 write key to untrusted or independently operated writers.
-
-`GITHUB_TOKEN` is provided by Actions; the workflow permissions allow issue comments and optional workflow handoff.
-
-## First-time setup
-
-1. Add the package files to your GitHub repository named `deeprepo`, preserving `.github/workflows/ram16-b2.yml`.
-2. Add the four B2 secrets. No `RAM16_COORDINATOR_REPO` variable is required; the workflow derives the canonical `owner/deeprepo` identity from GitHub.
-3. Open **Actions → RAM16 GGUF runner on Backblaze B2 → Run workflow**.
-4. Run `init` to create the empty sparse address space.
-5. Run `format-url`. The `model_url` input is prefilled with the Qwen3-4B-Instruct-2507 Q4_K_M GGUF URL tested for byte-range support. Keep `kv_mb=1024`, `batch_pages=8`, and `restart_import=false` for the first import. The URL server must provide `Content-Length` and honor HTTP byte ranges; a stable ETag or Last-Modified value is preferred.
-6. Apply the `ram16-chat` label to an issue, then run `serve`. Comment in the issue to converse with the model. `/remember <text>` stores a persistent fact in the original `RegionLog` memory region.
-
-### Resumable imports
-
-`format-url` commits each batch to B2 and then advances `ram16/IMPORT.json`. If the runner stops, run the same `format-url` command again with the same URL and layout. It verifies source identity, resumes from the last committed offset using HTTP Range, and reconstructs SHA-256 by rereading the already imported prefix from B2. If you intentionally want to abandon the partial import, select `restart_import=true` in the workflow; this clears the import checkpoint and starts again. Do not run two imports concurrently.
-
-The final superblock is marked ready only after the full byte count and SHA-256 have been verified. The normal import path computes a SHA-256 over the complete source GGUF before marking the superblock ready. Each stored page is independently SHA-256 verified when the native reader fetches it.
-
-
-### Native adapter manual build
-
-```bash
-sudo apt-get install cmake pkg-config libfuse3-dev libcurl4-openssl-dev libssl-dev zlib1g-dev libboost-dev
-cmake -S native/ram16-gguf-fuse -B native/ram16-gguf-fuse/build -DCMAKE_BUILD_TYPE=Release
-cmake --build native/ram16-gguf-fuse/build --parallel 2
+```
+repovram  16 bins x 1.99 GiB = 31.9 GiB sparse virtual   weights (immutable after import)
+reporam   16 bins x 1.99 GiB = 31.9 GiB sparse virtual   KV + registers (journal + gens)
+L0        bounded runner caches (~1.5 GiB pages + ~1.9 GiB f16 tensors)
+L0.5      job-local SSD page cache (6 GiB, in-place files, dies with the VM)
 ```
 
-The mount binary reads `B2_BUCKET`, `B2_ENDPOINT`, optional `B2_REGION` / `RAM16_B2_PREFIX`, and prefers `B2_READ_KEY_ID` / `B2_READ_APPLICATION_KEY` over the main write credentials. The workflow starts it automatically during `serve` and unmounts it on exit.
+Unwritten pages are implicit zeros. The 18.6 GiB model materializes **10 of 16** vram bins;
+a KV session materializes a few MB. Nothing is ever cloned or downloaded to your phone:
+imports and inference run entirely on GitHub runners.
 
-## Commands
+## The ring
+
+| repo | role |
+|---|---|
+| `deeprepo` | coordinator: chat intake, tokenizer, ring leases, streaming, workflows |
+| `deeprepo-cpu-1..5` | disposable CPU slots: prewarm/hydrate → decode shift → handoff |
+| `reporam` | sparse RAM tier: KV rows, hierarchical registers, jobs, budgets |
+| `repovram` | sparse VRAM tier: tiled GGUF weights |
+
+A chat turn is tokenized in `deeprepo`, written as a job spec into reporam registers, and
+handed to the **next prewarmed** slot under a lease. The slot prefills in chunks (KV written
+to reporam), decodes up to 32 tokens / 20 minutes, publishes token deltas, writes a handoff
+packet, and frees the lease. The next slot is hydrated **before** it is granted the lease
+and continues from the KV already in reporam. The coordinator tails the journal and streams
+the reply to the issue.
+
+## Where the memory claim is proven
+
+`tests/` runs offline, with a tiny random Qwen3-MoE GGUF and file-backed tiers that use the
+production pager:
+
+- **dequant is byte-exact vs ggml**: scalar ports of `dequantize_row_q{4,5,6}_K/q8_0` from
+  `ggml-quants.c` compared bit-for-bit (NaN-safe).
+- **engine == dense reference**: logits match a fully in-memory implementation, with every
+  weight read through sparse repovram bins and every KV row through reporam (strict f32
+  path: atol 1e-4; fp16-KV decode path: argmax-identical).
+- **handoff is exact**: generation split across two writer instances (simulated ring
+  rotation) produces the same tokens as a continuous run.
+- **compaction is safe**: deltas fold into new trimmed generation bins + manifest, old bins
+  deleted, fresh readers rehydrate the same KV.
+- **sparsity is real**: the tiny model materializes 1 of 16 vram bins; untouched pages and
+  absent bins read as zeros.
+- **import is safe + resumable**: the production importer tiles a streamed GGUF, preserves
+  the bootstrap superblock on a fresh runner, and re-running skips completed bins.
 
 ```bash
-python -m pip install -r requirements-b2.txt
-python ram16_b2.py init
-python ram16_b2.py status
-python ram16_b2.py format --gguf /path/to/model.gguf
-python ram16_b2.py format-url https://example.org/model.gguf
-python ram16_b2.py serve --minutes 330 --label ram16-chat --handoff
-python ram16_b2.py commit
-python ram16_b2.py gc                         # dry-run only
-python ram16_b2.py gc --min-age-days 7 --retain-generations 5 --apply
+pip install -r requirements-core.txt
+python tests/run_all.py
 ```
 
-For local administration, writer commands are disabled by default. Set `RAM16_ALLOW_LOCAL_WRITES=1` explicitly in a controlled environment if you intentionally want to bypass the GitHub coordinator check. Never run a local writer at the same time as a workflow writer.
+## Quick start
 
-## Garbage collection safety
+See **[docs/RUNBOOK.md](docs/RUNBOOK.md)**. In short:
 
-`gc` is **dry-run by default**. It validates visible manifests, retains the newest N generations and every generation younger than the age threshold, and only considers page objects not referenced by those retained manifests. `--apply` deletes old object versions, not just current names, because B2 buckets are versioned by default. The minimum age is at least one day; keep a generous retention window and run a dry-run first. The operation is serialized by the canonical repository's workflow concurrency group. Do not run GC while a non-cooperating external writer/importer is active.
+1. create the 8 public repos (skeletons are stamped as siblings: `deeprepo-cpu-1..5`,
+   `reporam`, `repovram`) and push them;
+2. add secret **`DEEPREPO_PAT`** to `deeprepo` and all five cpu repos;
+3. run workflows in order: **02 test → 00 bootstrap → 01 setup ring → 03 load model →
+   04 boot single → 05 serve**;
+4. label an issue **`deeprepo-chat`** and talk to the model.
 
-## Runtime limits
+## Optional middleman (hosted control plane / hot tier)
 
-### Native remote GGUF I/O (no full local model copy)
+Hosted runners cannot accept inbound connections, so if you want low-latency mutable state
+shared between runners — or a 24/7 orchestrator that survives GitHub disabling schedules —
+run the optional middleman on any host (Koyeb/Fly/Render/VPS) or use R2 behind a Worker:
 
-The `serve` workflow now builds and starts `native/ram16-gguf-fuse/ram16-gguf-mount`, a native C++17 FUSE3 filesystem. It exposes the imported GGUF as a normal read-only file at `/tmp/ram16-b2-mount/model.gguf`. The file's logical size is the GGUF size; its bytes are read directly from the RAM16 B2 page map.
+```bash
+python -m deepcore.middle serve --root /data --port 8080   # token auth, ranged read/write
+python -m deepcore keeper --loop --interval 600            # PAT control plane
+```
 
-The data path is:
+Set `DEEPREPO_RAM_BACKEND=middle` to move only the mutable RAM tier there, keep the weights
+on the free release CDN, and read [docs/MIDDLEMAN.md](docs/MIDDLEMAN.md) for the hosting
+matrix, token scopes, and the weight/release lifecycle (never rewrite weights on handoff).
 
-1. llama.cpp/ggml opens the mounted file through the existing `llama-cpp-python` model path.
-2. `use_mmap=True` lets the existing loader use normal memory mapping; no llama.cpp fork or local full-file materialization is required.
-3. Linux page faults/read requests enter the FUSE read callback.
-4. The C++ adapter signs S3-compatible GET requests using AWS Signature V4, fetches the referenced compressed 4-MiB B2 page object, decompresses it, verifies its SHA-256, and returns the requested byte range.
-5. A bounded native LRU cache (8 pages / 32 MiB by default) and the kernel page cache reduce repeated object reads.
+## Docs
 
-The adapter validates the `CURRENT` pointer against the manifest SHA-256, checks the generation and virtual geometry, validates page references, and verifies each fetched page before returning data. It mounts read-only. FUSE negotiates the maximum read size with the kernel; the adapter does not override `conn->max_read` during `init()`, avoiding a mismatch with the value established when `fuse_session_new()` creates the session. The existing `OutOfCoreGGUF.to_file()` path remains available for local use when `RAM16_GGUF_MOUNT_PATH` is not set.
+- [Architecture](docs/ARCHITECTURE.md) — tiers, journal/generation writes, data flow.
+- [Memory map](docs/MEMORY_MAP.md) — exact geometry, layouts, KV arithmetic, budgets.
+- [Model plan](docs/MODEL.md) — why this Qwen, tensor map, quant support, expectations.
+- [Runbook](docs/RUNBOOK.md) — setup, secrets, operations, troubleshooting.
+- [ToS safety](docs/TOS_SAFETY.md) — budgets, concurrency, retention, what we avoid.
+- [Middleman](docs/MIDDLEMAN.md) — optional hosted control plane + mutable hot tier.
 
-**Build dependencies on the GitHub runner:** `libfuse3-dev`, `libcurl4-openssl-dev`, `libssl-dev`, `zlib1g-dev`, `libboost-dev`, CMake and pkg-config. The workflow installs these and builds the C++ adapter automatically for `serve`. The runner must expose `/dev/fuse`; if not, the job fails explicitly rather than silently downloading the entire model.
+## Honest performance
 
-**Performance/limits:** B2 is still object storage, not RAM or VRAM. The first access to each 4-MiB page incurs a remote object GET and decompression. A 10-GiB model can require roughly 2,560 page-object fetches during a complete scan. mmap removes the complete local GGUF copy, but does not remove llama.cpp's need to allocate tensor buffers/working memory, nor does it make remote page faults low-latency. The runner must still have enough RAM/CPU/GPU memory for the model's actual inference allocations. The mount is read-only; model writes, training checkpoints and KV spill continue through the separate B2 register/memory path.
+This is out-of-core inference over a CDN, not local inference. Rough expectations on a
+2-core hosted runner: prefill 2k tokens in 4–10 min, 3–12 s per decoded token depending on
+expert-cache luck, ~32 tokens per 20-minute shift. Quality is the real Qwen3-30B-A3B's;
+throughput is the price of running it on memory that doesn't exist locally.
 
-This is a native mmap-compatible GGUF I/O adapter at the filesystem boundary, not a new ggml compute backend or a modified GGML tensor kernel. It deliberately preserves upstream llama.cpp compatibility instead of maintaining a brittle private fork.
+Default daily budget (shared by all writers, persisted in registers): 96 GiB down,
+12 GiB up, 288k API calls, 24k tokens. Caps fail closed.
 
-GitHub-hosted runners are temporary and time-limited. `--handoff` starts another workflow run; it does not preserve process RAM between jobs.
+## Persistent local tiers
 
-## Verification status
+On a machine that persists between runs (self-hosted runner, workstation) the bins can live
+as real files inside the repo tree, modified in place — `DEEPREPO_TIER_DIR=./tiers` switches
+both tiers to local files, no GitHub needed for the memory:
 
-Local verification passed for Python compilation, workflow YAML parsing, native C++ syntax checking, and a native integration harness backed by a local S3-compatible HTTP fixture. The harness loaded the B2 `CURRENT` register and manifest, verified page hashes, decompressed page objects, and performed random-offset reads; the C++ AWS Signature V4 authorization header matched botocore's reference signer. This environment did not have libfuse3 development headers or `/dev/fuse`, so a real FUSE mount/build and actual GitHub-hosted-runner inference remain unverified until the workflow is run. No real B2 credentials or model were available here.
+```bash
+export DEEPREPO_TIER_DIR="$PWD/tiers"
+python -m deepcore bootstrap
+python -m deepcore load-model --url <gguf-url>
+python -m deepcore local --prompt "hello"
+```
 
-## Current engineering boundaries
+Hosted runners stay on release tiers because their disks are wiped after every job; see
+[docs/RUNBOOK.md](docs/RUNBOOK.md#6-persistent-local-tiers-self-hosted--single-machine).
 
-- Coordinator serialization applies to cooperating clients that use the canonical repository workflow. It is not an atomic cross-provider CAS and cannot stop a client holding the B2 key from bypassing this program.
-- The B2 safety cap measures current visible page objects, not unrelated bucket contents or historical versions hidden by delete markers. Run GC to reclaim old versions; keep quota headroom.
-- End-to-end tests against your actual B2 bucket and your selected GGUF still require your credentials and account permissions; no credentials were supplied for this local verification.
+## Legacy
+
+The earlier RAM16/Backblaze-B2 experiment (`ram16.py`, `ram16_b2.py`, `native/`,
+`.github/workflows/ram16-b2.yml`) is kept intact for reference and is unrelated to the
+ring above. The new system reuses ram16's ranged-asset pager, delta journal, compaction
+primitives, RegionLog, and issue queue.

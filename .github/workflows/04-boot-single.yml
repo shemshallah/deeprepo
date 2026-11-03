@@ -1,0 +1,78 @@
+name: 04 boot single
+# Stability gate: one runner boots the model alone, answers one prompt end to end
+# (prefill + decode + KV in reporam + paged weights from repovram), and the gate record
+# is written only on success. Ring-wide serving stays locked until this passes.
+on:
+  workflow_dispatch:
+    inputs:
+      runner:
+        description: ring slot to boot first
+        type: choice
+        options: [deeprepo-cpu-1, deeprepo-cpu-2, deeprepo-cpu-3, deeprepo-cpu-4, deeprepo-cpu-5]
+        default: deeprepo-cpu-1
+      prompt:
+        description: test prompt
+        type: string
+        default: "In two sentences, explain why a 30B model can run on a 7GB runner with repo-backed sparse VRAM."
+      minutes:
+        description: wall-clock budget for the boot
+        type: string
+        default: "60"
+      max_tokens:
+        description: tokens to generate
+        type: string
+        default: "24"
+
+permissions:
+  contents: read
+
+concurrency: boot-single
+
+env:
+  GH_TOKEN: ${{ secrets.DEEPREPO_PAT }}
+  DEEPREPO_RAM: ${{ vars.REPORAM_REPO || format('{0}/reporam', github.repository_owner) }}
+  DEEPREPO_VRAM: ${{ vars.REPOVRAM_REPO || format('{0}/repovram', github.repository_owner) }}
+  DEEPREPO_MAIN: ${{ github.repository }}
+  DEEPREPO_RAM_BACKEND: ${{ vars.RAM_BACKEND || 'github' }}
+  DEEPREPO_VRAM_BACKEND: ${{ vars.VRAM_BACKEND || 'github' }}
+  DEEPREPO_MIDDLE_URL: ${{ vars.MIDDLE_URL }}
+  DEEPREPO_MIDDLE_TOKEN: ${{ secrets.MIDDLE_TOKEN }}
+
+jobs:
+  boot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements-core.txt
+
+      - name: Preflight (model + tiers)
+        run: |
+          [ -n "$GH_TOKEN" ] || { echo "::error::Missing DEEPREPO_PAT"; exit 1; }
+          python -m deepcore status | tee status.txt
+          grep -q '"ready": true' status.txt || { echo "::error::no model in repovram (run 03-load-model)"; exit 1; }
+
+      - name: Boot one runner end-to-end
+        run: |
+          set -o pipefail
+          python -m deepcore once \
+            --runner "${{ format('{0}/{1}', github.repository_owner, inputs.runner) }}" \
+            --prompt "${{ inputs.prompt }}" \
+            --minutes "${{ inputs.minutes }}" \
+            --max-tokens "${{ inputs.max_tokens }}" | tee once.log
+
+      - name: Write stability gate
+        run: python -m deepcore gate --note "single-runner boot via 04 (${{ inputs.runner }})"
+
+      - name: Summary
+        run: |
+          {
+            echo "## Single-runner boot: ${{ inputs.runner }}"
+            echo '```'
+            cat once.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

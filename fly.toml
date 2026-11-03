@@ -1,0 +1,22 @@
+# fly.io: fly volumes create middle_data --size 3
+#          fly secrets set MIDDLE_TOKEN=<long-random>
+#          fly deploy
+app = "deeprepo-middle"
+primary_region = "iad"
+
+[build]
+
+[mounts]
+  source = "middle_data"
+  destination = "/data"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = false
+  min_machines_running = 1
+
+[[vm]]
+  memory = "512mb"
+  cpu_kind = "shared"
+  cpus = 1

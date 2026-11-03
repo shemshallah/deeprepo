@@ -7,6 +7,7 @@ object with the same byte-addressed interface expected by Machine/serve.
 """
 from __future__ import annotations
 import argparse, hashlib, json, os, sys, threading, time, zlib, urllib.request, urllib.error, collections, shutil, uuid, datetime
+import concurrent.futures as cf
 from pathlib import Path
 
 import ram16
@@ -24,6 +25,13 @@ PREFIX = os.getenv("RAM16_B2_PREFIX", "ram16")
 FORMAT = 2
 MAX_STORED_BYTES = int(os.getenv("RAM16_B2_MAX_BYTES", "9500000000"))
 ZERO_PAGE = bytes(PAGE_SIZE)
+# Two page tiers. Addresses below `small_base` (weights) use 4-MiB pages; addresses from `small_base` up
+# (the KV-spill and memory regions) use small pages so a few-KB write rewrites ~256 KiB, not 4 MiB.
+SMALL_PAGE = int(os.getenv("RAM16_B2_SMALL_KB", "256")) * 1024
+WORKERS = int(os.getenv("RAM16_B2_WORKERS", "16"))
+MIN_CACHE_BYTES = int(os.getenv("RAM16_B2_MIN_CACHE_MB", "256")) << 20
+if SMALL_PAGE < 4096 or PAGE_SIZE % SMALL_PAGE:
+    raise SystemExit("RAM16_B2_SMALL_KB must be >= 4 and divide 4096 (e.g. 16, 64, 256, 1024)")
 
 
 def _config():
@@ -104,34 +112,41 @@ class B2Store:
 
 
 class B2RAM:
-    """Sparse 32-GiB RAM16-compatible byte store; 4-MiB immutable content-addressed pages."""
+    """Sparse 32-GiB RAM16-compatible byte store on B2: immutable content-addressed pages in two tiers
+    (4-MiB for weights, small pages for the KV/mem regions). Missing pages read as zeros.
+    Reads are parallel (thread pool) with real prefetch; flush uploads dirty pages in parallel."""
     def __init__(self, backend=None, writer=False, cache_pages=32):
         self.b2 = backend or B2Store(); self.writer = writer
         self.page, self.size, self.npages = PAGE_SIZE, VIRTUAL_SIZE, PAGE_COUNT
+        self.small, self.small_base = SMALL_PAGE, None
         self._check_writer_authority()
         self.cap, self.ra, self.last = max(2, cache_pages), 0, -2
-        self.lk = threading.RLock(); self.cache = collections.OrderedDict(); self.dirty = {}
-        self.pool = None; self.journal = None; self.jmap = {}; self.gen = 0
-        self.page_map = {}; self._unpublished = False
+        self.lk = threading.RLock(); self.cache = collections.OrderedDict(); self.cache_bytes = 0
+        self.dirty = {}; self.fly = {}; self.epoch = 0
+        self.pool = cf.ThreadPoolExecutor(WORKERS)
+        self.journal = None; self.jmap = {}; self.gen = 0
+        self.page_map = {}; self.spage_map = {}; self.known = set(); self._unpublished = False
+        self.st = collections.Counter()
         self.stored_bytes = sum(int(x.get("Size", 0)) for x in self.b2.list(f"{PREFIX}/pages/"))
         self._load()
 
     def _check_writer_authority(self):
         if not self.writer: return
-        coordinator = (os.getenv("RAM16_COORDINATOR_REPO") or os.getenv("GITHUB_REPOSITORY", "")).strip()
         current = os.getenv("GITHUB_REPOSITORY", "").strip()
+        coordinator = (os.getenv("RAM16_COORDINATOR_REPO") or current).strip()
         if os.getenv("RAM16_ALLOW_LOCAL_WRITES") == "1" and not current:
             return  # explicit escape hatch for controlled local administration/tests
         if not coordinator:
-            raise PermissionError("set the GitHub repository variable RAM16_COORDINATOR_REPO to the canonical owner/repo; direct writers are disabled")
+            raise PermissionError("set RAM16_COORDINATOR_REPO to the canonical owner/repo (or run inside GitHub Actions); direct writers are disabled")
         if current.lower() != coordinator.lower():
             raise PermissionError(f"B2 writes are centralized in {coordinator}; dispatch the RAM16 workflow there instead of writing from {current or 'a non-coordinator environment'}")
 
+    # ---- manifest ----
     def _load(self):
         try: ptr_raw = self.b2.get(f"{PREFIX}/CURRENT")
         except KeyError:
             if not self.writer: raise RuntimeError("RAM16 B2 store is not initialized; run `init` or `format --gguf` as writer")
-            self._publish(0, {}); return
+            self._publish(0, {}, {}); return
         ptr = json.loads(ptr_raw); manifest_raw = self.b2.get(ptr["manifest"])
         if hashlib.sha256(manifest_raw).hexdigest() != ptr.get("sha256"):
             raise IOError("B2 CURRENT manifest SHA-256 mismatch")
@@ -142,61 +157,28 @@ class B2RAM:
             raise IOError("B2 CURRENT generation does not match its manifest")
         pages = m.get("pages")
         if not isinstance(pages, dict): raise IOError("B2 manifest page map is invalid")
-        for k, digest in pages.items():
-            if not str(k).isdigit() or not 0 <= int(k) < self.npages or not isinstance(digest, str) or len(digest) != 64:
+        def ok(d): return isinstance(d, str) and len(d) == 64
+        sbase = m.get("small_base"); small = int(m.get("small_page", self.small)); spages = m.get("spages", {}) or {}
+        if sbase is not None and (int(sbase) % PAGE_SIZE or not 0 < int(sbase) < VIRTUAL_SIZE):
+            raise IOError("B2 manifest small_base is invalid")
+        if small < 4096 or PAGE_SIZE % small: raise IOError("B2 manifest small_page is invalid")
+        nsmall = 0 if sbase is None else (VIRTUAL_SIZE - int(sbase)) // small
+        for k, d in pages.items():
+            if not str(k).isdigit() or not 0 <= int(k) < self.npages or not ok(d):
                 raise IOError("B2 manifest contains an invalid page reference")
-        self.gen, self.page_map = int(m["generation"]), dict(pages)
+            if sbase is not None and int(k) * PAGE_SIZE >= int(sbase): raise IOError("large page inside the small-page tier")
+        for k, d in spages.items():
+            if sbase is None or not str(k).isdigit() or not 0 <= int(k) < nsmall or not ok(d):
+                raise IOError("B2 manifest contains an invalid small-page reference")
+        with self.lk:
+            self.gen, self.page_map, self.spage_map = int(m["generation"]), dict(pages), dict(spages)
+            self.small, self.small_base = small, (None if sbase is None else int(sbase))
+            self.known = set(pages.values()) | set(spages.values())
+            self._reset_cache()
 
-    def _page(self, p):
-        if not 0 <= p < self.npages: raise ValueError("virtual address out of range")
-        if p in self.dirty: return self.dirty[p]
-        if p in self.cache:
-            self.cache.move_to_end(p); return self.cache[p]
-        digest = self.page_map.get(str(p))
-        if digest is None: data = ZERO_PAGE
-        else:
-            packed = self.b2.get(f"{PREFIX}/pages/{digest}.z")
-            data = zlib.decompress(packed)
-            if len(data) != self.page or hashlib.sha256(data).hexdigest() != digest:
-                raise IOError(f"B2 page {p} failed size/hash verification")
-        self._put(p, data); return data
-
-    def _put(self, p, data):
-        self.cache[p] = data; self.cache.move_to_end(p)
-        while len(self.cache) > self.cap: self.cache.popitem(last=False)
-
-    def _get(self, p): return self._page(p)
-    def prefetch(self, addr, n):
-        # Explicit no-op: B2 is object storage; synchronous reads are bounded by caller windows.
-        return None
-
-    def read(self, addr, n):
-        if addr < 0 or n < 0 or addr + n > self.size: raise AssertionError("out of range")
-        if n == 0: return b""
-        out = bytearray(); end = addr + n
-        while addr < end:
-            p, off = divmod(addr, self.page); take = min(end - addr, self.page - off)
-            out.extend(self._page(p)[off:off + take]); addr += take
-        return bytes(out)
-
-    def write(self, addr, data):
-        if not self.writer: raise PermissionError("B2 RAM opened read-only")
-        data = memoryview(data); end = addr + len(data)
-        if addr < 0 or end > self.size: raise AssertionError("out of range")
-        pos = 0
-        while addr + pos < end:
-            absolute = addr + pos; p, off = divmod(absolute, self.page)
-            take = min(end - absolute, self.page - off)
-            if off == 0 and take == self.page: page = bytes(data[pos:pos + take])
-            else:
-                b = bytearray(self._page(p)); b[off:off + take] = data[pos:pos + take]; page = bytes(b)
-            with self.lk: self.dirty[p] = page; self.cache.pop(p, None)
-            pos += take
-
-    def _publish(self, generation, pages):
-        # Optimistic stale-writer detection. GitHub Actions concurrency in the
-        # coordinator repository is the serialization authority; this check
-        # catches stale snapshots but is not a storage-provider atomic CAS.
+    def _publish(self, generation, pages, spages):
+        # Optimistic stale-writer detection. GitHub Actions concurrency in the coordinator repository is the
+        # serialization authority; this catches stale snapshots but is not a storage-provider atomic CAS.
         if generation > 0:
             try:
                 current = json.loads(self.b2.get(f"{PREFIX}/CURRENT"))
@@ -206,6 +188,7 @@ class B2RAM:
                 if generation != 0: raise RuntimeError("B2 CURRENT disappeared during commit")
         m = {"format": FORMAT, "generation": generation, "virtual_size": self.size,
              "page_size": self.page, "page_count": self.npages, "pages": pages,
+             "small_base": self.small_base, "small_page": self.small, "spages": spages,
              "created_unix": int(time.time())}
         raw = json.dumps(m, sort_keys=True, separators=(",", ":")).encode()
         key = f"{PREFIX}/manifests/{generation:012d}.json"
@@ -213,31 +196,162 @@ class B2RAM:
         ptr = json.dumps({"generation": generation, "manifest": key,
                           "sha256": hashlib.sha256(raw).hexdigest()}, sort_keys=True).encode()
         self.b2.put(f"{PREFIX}/CURRENT", ptr, "application/json")
-        self.gen, self.page_map = generation, dict(pages)
+        with self.lk:
+            self.gen, self.page_map, self.spage_map = generation, dict(pages), dict(spages)
+            self.known = set(pages.values()) | set(spages.values())
+
+    def set_small_tier(self, base):
+        """Switch addresses >= base to small pages. Only legal while that range holds no data (right after format)."""
+        if base % self.page or not 0 < base < self.size: raise ValueError("small-tier base must be page aligned")
+        if self.small_base == base: return
+        if self.small_base is not None: raise RuntimeError(f"small tier already starts at {self.small_base}; re-format to change it")
+        with self.lk:
+            if any(int(k) * self.page >= base for k in self.page_map) or any(t == 0 and i * self.page >= base for t, i in self.dirty):
+                raise RuntimeError("the KV/mem region already holds 4-MiB pages; re-format the store to use small pages")
+            self.small_base = base; self._unpublished = True
+
+    # ---- tiers ----
+    def _unit(self, addr):
+        if self.small_base is not None and addr >= self.small_base:
+            i = (addr - self.small_base) // self.small
+            return 1, i, self.small_base + i * self.small, self.small
+        i = addr // self.page
+        return 0, i, i * self.page, self.page
+
+    def _usize(self, t): return self.small if t else self.page
+    def _zero(self, t):
+        if t == 0: return ZERO_PAGE
+        if len(getattr(self, "_szero", b"")) != self.small: self._szero = bytes(self.small)
+        return self._szero
+    def _map(self, t): return self.spage_map if t else self.page_map
+
+    # ---- cache / paging ----
+    def _budget(self): return max(self.cap * self.page, MIN_CACHE_BYTES)
+    def _reset_cache(self):
+        self.cache.clear(); self.cache_bytes = 0; self.epoch += 1
+
+    def _put(self, k, data):
+        old = self.cache.pop(k, None)
+        if old is not None: self.cache_bytes -= len(old)
+        self.cache[k] = data; self.cache_bytes += len(data)
+        while self.cache_bytes > self._budget() and len(self.cache) > 1:
+            _, v = self.cache.popitem(last=False); self.cache_bytes -= len(v)
+
+    def _drop(self, k):
+        v = self.cache.pop(k, None)
+        if v is not None: self.cache_bytes -= len(v)
+
+    def _fetch(self, digest, size):
+        data = zlib.decompress(self.b2.get(f"{PREFIX}/pages/{digest}.z"))
+        if len(data) != size or hashlib.sha256(data).hexdigest() != digest:
+            raise IOError(f"B2 page {digest[:12]} failed size/hash verification")
+        return data
+
+    def _load_unit(self, k, digest, size, epoch):
+        try:
+            data = self._fetch(digest, size)
+            with self.lk:
+                if k not in self.dirty and epoch == self.epoch: self._put(k, data)
+                self.st["fetched"] += 1
+            return data
+        finally:
+            with self.lk: self.fly.pop((k, epoch), None)
+
+    def _submit(self, k, digest, size):  # lk held
+        fk = (k, self.epoch); f = self.fly.get(fk)
+        if f is None:
+            f = self.pool.submit(self._load_unit, k, digest, size, self.epoch); self.fly[fk] = f
+        return f
+
+    def _kick(self, t, i):  # lk held: start a background load if the unit is not already local
+        k = (t, i)
+        if k in self.dirty or k in self.cache: return
+        d = self._map(t).get(str(i))
+        if d: self._submit(k, d, self._usize(t))
+
+    def _get_unit(self, t, i):
+        k = (t, i)
+        with self.lk:
+            if k in self.dirty: return self.dirty[k]
+            c = self.cache.get(k)
+            if c is not None: self.cache.move_to_end(k); self.st["hit"] += 1; return c
+            d = self._map(t).get(str(i))
+            if d is None: return self._zero(t)
+            f = self._submit(k, d, self._usize(t))
+        return f.result()
+
+    def _get(self, p):  # one 4-MiB page by index (compat with ram16.py helpers)
+        return self.read(p * self.page, self.page)
+    _page = _get
+
+    def prefetch(self, addr, n):
+        if n <= 0 or addr >= self.size: return
+        a, end, cnt = addr, min(addr + n, self.size), 0
+        with self.lk:
+            while a < end and cnt < 4 * WORKERS:
+                t, i, ub, us = self._unit(a); self._kick(t, i); a = ub + us; cnt += 1
+
+    def read(self, addr, n):
+        if addr < 0 or n < 0 or addr + n > self.size: raise AssertionError("out of range")
+        if n == 0: return b""
+        units, a, end = [], addr, addr + n
+        while a < end:
+            t, i, ub, us = self._unit(a); take = min(end - a, ub + us - a); units.append((t, i, a - ub, take)); a += take
+        win = max(2, min(2 * WORKERS, (self._budget() // 2) // self.page))
+        out = bytearray()
+        for j, (t, i, off, take) in enumerate(units):
+            with self.lk:
+                for t2, i2, _, _ in units[j:j + win]: self._kick(t2, i2)
+            out += self._get_unit(t, i)[off:off + take]
+        return bytes(out)
+
+    def write(self, addr, data):
+        if not self.writer: raise PermissionError("B2 RAM opened read-only")
+        data = memoryview(data); end = addr + len(data)
+        if addr < 0 or end > self.size: raise AssertionError("out of range")
+        pos = 0
+        while addr + pos < end:
+            absolute = addr + pos; t, i, ub, us = self._unit(absolute); off = absolute - ub
+            take = min(end - absolute, us - off)
+            if off == 0 and take == us: page = bytes(data[pos:pos + take])
+            else:
+                b = bytearray(self._get_unit(t, i)); b[off:off + take] = data[pos:pos + take]; page = bytes(b)
+            with self.lk: self.dirty[(t, i)] = page; self._drop((t, i))
+            pos += take
 
     def flush(self):
         if not self.writer: raise PermissionError("B2 RAM opened read-only")
         if not self.dirty and not self._unpublished: return self.gen
-        pages = dict(self.page_map); uploaded = 0
-        for p, data in sorted(self.dirty.items()):
-            if data == ZERO_PAGE: pages.pop(str(p), None); continue
-            digest = hashlib.sha256(data).hexdigest(); key = f"{PREFIX}/pages/{digest}.z"
-            if not self.b2.exists(key):
-                packed = zlib.compress(data, 1)
+        with self.lk: items = sorted(self.dirty.items())
+        pages, spages = dict(self.page_map), dict(self.spage_map); todo = {}
+        for (t, i), data in items:
+            m = spages if t else pages
+            if data == self._zero(t): m.pop(str(i), None); continue
+            d = hashlib.sha256(data).hexdigest(); m[str(i)] = d
+            if d not in self.known and d not in todo: todo[d] = data
+        def up(item):
+            d, data = item; packed = zlib.compress(data, 1)
+            with self.lk:
                 if self.stored_bytes + len(packed) > MAX_STORED_BYTES:
                     raise RuntimeError(f"B2 page-object safety cap ({MAX_STORED_BYTES:,} bytes) reached; no manifest was published")
-                self.b2.put(key, packed); self.stored_bytes += len(packed); uploaded += 1
-            pages[str(p)] = digest
-        self._publish(self.gen + 1, pages)
-        self.dirty.clear(); self.cache.clear(); self._unpublished = False
+                self.stored_bytes += len(packed)
+            self.b2.put(f"{PREFIX}/pages/{d}.z", packed)  # content-addressed: a PUT is idempotent, no Class-B HEAD needed
+        list(self.pool.map(up, todo.items()))
+        self._publish(self.gen + 1, pages, spages)
+        with self.lk:
+            self.dirty.clear(); self._reset_cache(); self._unpublished = False
+        self.st["uploaded"] += len(todo)
         return self.gen
 
-    def refresh(self): self._load(); self.cache.clear(); return self.gen
+    def refresh(self): self._load(); return self.gen
     def stats(self):
         return {"backend": "Backblaze B2", "virtual_bytes": self.size, "virtual_gib": self.size / 1024**3,
                 "page_bytes": self.page, "page_count": self.npages, "allocated_pages": len(self.page_map),
                 "logical_allocated_bytes": len(self.page_map) * self.page, "stored_page_object_bytes": self.stored_bytes,
-                "dirty_pages": len(self.dirty), "generation": self.gen, "writer": self.writer}
+                "small_page_bytes": self.small, "small_tier_base": self.small_base, "allocated_small_pages": len(self.spage_map),
+                "small_allocated_bytes": len(self.spage_map) * self.small,
+                "dirty_pages": len(self.dirty), "generation": self.gen, "writer": self.writer,
+                "cache_mib": round(self.cache_bytes / 1048576, 1), **{f"io_{k}": v for k, v in self.st.items()}}
 
 
 def _write_stream(ram, path, address, batch_pages=8):
@@ -256,6 +370,7 @@ def _write_stream(ram, path, address, batch_pages=8):
 def format_store(ram, gguf_path, kv_mb=1024, batch_pages=8):
     p = Path(gguf_path); model_size = p.stat().st_size
     layout = ram16.plan_layout(ram.npages, ram.page, model_size, kv_mb)
+    ram.set_small_tier(layout["kv"][0] * ram.page)
     sha = hashlib.sha256()
     with p.open("rb") as f:
         for b in iter(lambda: f.read(8 << 20), b""): sha.update(b)
@@ -300,6 +415,7 @@ def format_url(ram, url, kv_mb=1024, batch_pages=8, restart=False):
     model_size = meta["length"]
     if not model_size: raise ValueError("model URL must expose a nonzero Content-Length")
     layout = ram16.plan_layout(ram.npages, ram.page, model_size, kv_mb)
+    ram.set_small_tier(layout["kv"][0] * ram.page)
     identity = hashlib.sha256(url.encode()).hexdigest()
     checkpoint_key = _import_checkpoint_key()
     checkpoint = None
@@ -411,7 +527,7 @@ def garbage_collect(ram, retain_generations=5, min_age_days=7, apply=False):
     referenced = set()
     for _, _, key, m in parsed:
         if key in keep:
-            referenced.update(f"{PREFIX}/pages/{digest}.z" for digest in m.get("pages", {}).values())
+            referenced.update(f"{PREFIX}/pages/{digest}.z" for digest in list(m.get("pages", {}).values()) + list((m.get("spages") or {}).values()))
 
     # Use the version listing, not only ListObjectsV2: B2 buckets are versioned
     # by default, and a simple delete can leave older versions consuming quota.
@@ -454,12 +570,15 @@ def build_parser():
     s = sub.add_parser("serve"); s.add_argument("--minutes", type=float, default=330); s.add_argument("--label", default="ram16-chat"); s.add_argument("--max-tokens", type=int, default=512); s.add_argument("--idle", type=int, default=20); s.add_argument("--n-ctx", type=int, default=4096)
     s.add_argument("--cache-pages", type=int, default=32); s.add_argument("--handoff", action="store_true")
     c = sub.add_parser("commit")
+    sub.add_parser("retier", help="switch an already-formatted store's KV/mem regions to small pages (no model re-import)")
     return ap
 
 
 def main(argv=None):
+    try: sys.stdout.reconfigure(line_buffering=True)  # Actions pipes stdout; without this the log looks frozen
+    except Exception: pass
     args = build_parser().parse_args(argv)
-    writer = args.cmd in ("init", "format", "format-url", "serve", "commit", "gc")
+    writer = args.cmd in ("init", "format", "format-url", "serve", "commit", "gc", "retier")
     ram = B2RAM(writer=writer, cache_pages=getattr(args, "cache_pages", 32))
     if args.cmd == "init":
         print(json.dumps(ram.stats(), indent=2))
@@ -480,12 +599,21 @@ def main(argv=None):
         print(json.dumps({"model": model, **ram.stats()}, indent=2))
     elif args.cmd == "gc":
         print(json.dumps(garbage_collect(ram, args.retain_generations, args.min_age_days, args.apply), indent=2))
+    elif args.cmd == "retier":
+        if ram.read(0, 8) != b"RAM16MAP": raise SystemExit("store is not formatted yet; format-url sets the small tier itself")
+        ram.set_small_tier(ram16.read_super(ram)["layout"]["kv"][0] * ram.page)
+        print("published generation", ram.flush()); print(json.dumps(ram.stats(), indent=2))
     elif args.cmd == "commit":
         print("published generation", ram.flush())
     elif args.cmd == "serve":
         token = os.getenv("GH_TOKEN") or os.getenv("GITHUB_TOKEN")
         repo = os.getenv("RAM16_REPO") or os.getenv("GITHUB_REPOSITORY")
         if not token or not repo: raise SystemExit("Set GH_TOKEN/GITHUB_TOKEN and GITHUB_REPOSITORY")
+        if ram.small_base is None and ram.read(0, 8) == b"RAM16MAP":  # auto-upgrade a store formatted before small pages existed
+            try:
+                ram.set_small_tier(ram16.read_super(ram)["layout"]["kv"][0] * ram.page)
+                print("KV/mem regions switched to small pages, generation", ram.flush(), flush=True)
+            except RuntimeError as e: print("small-page tier not enabled:", e, flush=True)
         machine = ram16.Machine(ram)
         model_sha = machine.sb["model"].get("sha256", "")
         if len(model_sha) != 64 or any(c not in "0123456789abcdef" for c in model_sha.lower()):
