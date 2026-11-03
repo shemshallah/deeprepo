@@ -6,6 +6,7 @@ frees lease -> coordinator prewarms (hydrates) the NEXT runner -> grants lease -
 runner continues from the packet. Nobody is handed work before hydration succeeds.
 """
 import json
+import os
 import time
 import urllib.request
 
@@ -57,7 +58,13 @@ def handoff_packet(regs, job_id, runner, pos, last_tok, n_generated, stats=None)
     return pkt
 
 
-RING = [f"deeprepo-cpu-{i}" for i in range(1, 6)]
+def ring_slots(main_repo=""):
+    """owner/repo names for the five slots (workflow_dispatch needs the full name)."""
+    owner = main_repo.split("/")[0] if main_repo and "/" in main_repo else os.environ.get("GITHUB_REPOSITORY_OWNER", "")
+    return [f"{owner}/deeprepo-cpu-{i}" if owner else f"deeprepo-cpu-{i}" for i in range(1, 6)]
+
+
+RING = ring_slots(os.environ.get("DEEPREPO_MAIN", ""))
 
 
 def next_runner(regs, current=None):

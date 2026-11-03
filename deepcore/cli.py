@@ -92,7 +92,7 @@ def cmd_sweep(env, op="selftest"):
     from .coordinator import Coordinator
     c = Coordinator(env)
     out = {}
-    for r in ring.RING:
+    for r in ring.ring_slots(env.main_repo):
         try:
             out[r] = c.prewarm(r, op=op)
         except Exception as e:

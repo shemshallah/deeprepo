@@ -126,7 +126,7 @@ class StatusBoard:
             env.regs.put("ring/started", started)
         uptime = _fmt_dur(time.time() - (started or time.time()))
         try:
-            slots = len(__import__("deepcore.ring", fromlist=["RING"]).RING)
+            slots = len(__import__("deepcore.ring", fromlist=["ring_slots"]).ring_slots(env.main_repo))
         except Exception:
             slots = 5
         health = env.regs.get("ring/health") or {}

@@ -22,6 +22,7 @@ class Coordinator:
     def __init__(s, env, log=print):
         s.env, s.log = env, log
         s.health = env.regs.get("ring/health") or {}
+        s.ring = ring.ring_slots(env.main_repo)
         s.token = env.token
         s.status = StatusBoard(env.main_repo, env.token, log=log)
 
@@ -53,11 +54,11 @@ class Coordinator:
         return ok
 
     def pick(s, current=None, exclude=()):
-        alive = [r for r in ring.RING if (s.health.get(r) or {}).get("ok") and r not in exclude]
+        alive = [r for r in s.ring if (s.health.get(r) or {}).get("ok") and r not in exclude]
         if not alive:
-            alive = [r for r in ring.RING if r not in exclude]
+            alive = [r for r in s.ring if r not in exclude]
         if not alive:
-            alive = list(ring.RING)
+            alive = list(s.ring)
         if current in alive and len(alive) > 1:
             alive.remove(current)
         return alive[int(time.time()) // 60 % len(alive)]
@@ -77,7 +78,7 @@ class Coordinator:
             if not s.prewarm(runner):
                 failed.add(runner)
                 current = None
-                if len(failed) >= len(ring.RING):
+                if len(failed) >= len(s.ring):
                     break
                 continue
             ring.Lease.grant(regs, runner, minutes=max_shift_minutes + 10)  # renewed per internal shift
@@ -127,15 +128,22 @@ class Coordinator:
         if max_tokens is None:
             max_tokens = int(os.environ.get("MAX_REPLY_TOKENS", "48"))
         ids = tok.chat_ids(req.messages)
-        job_id = f"j{int(time.time())}"
-        left = max(1, min(max_tokens, env.budget.caps["tokens"] - env.budget.today["tokens"]))
-        regs.put(f"job/{job_id}", {
-            "id": job_id, "issue": req.id, "prompt_ids": ids,
-            "gen": {"max_tokens": left, "temp": 0.7, "top_k": 20, "top_p": 0.8,
-                    "penalty": 1.05, "seed": int(time.time()) % 2**31,
-                    "f16_cache_mb": 1856, "chunk": 192},
-            "t": int(time.time())})
-        regs.commit()
+        active = regs.get(f"sess/active/{req.id}")
+        job = regs.get(f"job/{active['job']}") if active else None
+        if job and not regs.get(f"run/{active['job']}/done"):
+            job_id, ids = active["job"], job.get("prompt_ids", ids)
+            s.log(f"issue {req.id}: resuming job {job_id}")
+        else:
+            job_id = f"j{int(time.time())}"
+            left = max(1, min(max_tokens, env.budget.caps["tokens"] - env.budget.today["tokens"]))
+            regs.put(f"job/{job_id}", {
+                "id": job_id, "issue": req.id, "prompt_ids": ids,
+                "gen": {"max_tokens": left, "temp": 0.7, "top_k": 20, "top_p": 0.8,
+                        "penalty": 1.05, "seed": int(time.time()) % 2**31,
+                        "f16_cache_mb": 1856, "chunk": 192},
+                "t": int(time.time())})
+            regs.put(f"sess/active/{req.id}", {"job": job_id, "t": int(time.time())})
+            regs.commit()
         q = s.queue
         handle = q.begin(req)
         done, text = s.run_job(job_id, time.time() + minutes * 60,
@@ -145,9 +153,12 @@ class Coordinator:
             final = regs.get(f"run/{job_id}/done") or {}
             regs.put(f"sess/{req.id}/{job_id}", {"q": (req.messages[-1]["content"] or "")[:2000],
                                                  "a": text[:8000], "stats": final.get("stats")})
+            if (regs.get(f"sess/active/{req.id}") or {}).get("job") == job_id:
+                regs.delete(f"sess/active/{req.id}")
             regs.commit()
         else:
-            q.finish(handle, text + "\n\n⏸ shift budget reached — the keeper will continue on the next dispatch.")
+            # keep the comment unfinished (▌) and the active job; the next dispatch resumes it
+            q.update(handle, text + "\n\n⏳ continuing on the next dispatch…")
         env.persist_budget()
         env.safe_commit()
         return text
