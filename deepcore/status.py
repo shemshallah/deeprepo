@@ -150,6 +150,11 @@ class StatusBoard:
             f"**Checkpoint** v-ckpt-{gen} · **Journal seq** {seq} · **Lease** "
             f"`{holder or 'free'}` epoch {lease.get('epoch', 0)}",
         ]
+        last = env.regs.get("stats/last") or {}
+        if last.get("tok_per_s") is not None:
+            lines.append(f"**Throughput** {last['tok_per_s']:.3f} tok/s · "
+                         f"prefill {last.get('prefill_secs')}s · decode {last.get('decode_secs')}s · "
+                         f"first token {last.get('first_token_secs')}s · paged {last.get('vram_bytes',0)/2**30:.1f} GiB")
         if extra:
             lines.append(extra)
         lines.append(f"_updated {now}_")

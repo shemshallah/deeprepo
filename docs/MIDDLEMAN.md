@@ -60,6 +60,12 @@ Once per interval it:
 4. compacts reporam generation bins when the journal grows;
 5. dispatches `05-serve` when the ring is idle.
 
+**The middleman is never in the weight/KV data path.** Prefill and decode page weights
+directly from GitHub's release CDN; a 512 MB free-tier service cannot proxy 18 GiB and
+must not try. The Koyeb service runs only the keeper (dispatch, quota, status). Measured:
+a full 30B boot moved 28.7 GB through the runner<->CDN path with **zero** page requests
+through Koyeb.
+
 This is the "machinery that uses a PAT to read/write the ephemeral RepoRAM and cycle the
 runners" — but **without proxying bulk bytes**. Runners still talk directly to GitHub:
 
