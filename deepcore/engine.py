@@ -250,6 +250,16 @@ class Qwen3MoE:
         if C > 4:  # prefill: fetch the layer's expert tensors in few large runs
             for nm in ("ffn_gate_exps", "ffn_up_exps", "ffn_down_exps"):
                 s.prefetch(f"blk.{l}.{nm}.weight")
+        else:
+            # decode: issue all selected expert slice fetches in parallel before dequant,
+            # so latency overlaps instead of serializing 24 small range requests per layer
+            used = np.unique(top)
+            for e in used:
+                for nm in ("ffn_gate_exps", "ffn_up_exps", "ffn_down_exps"):
+                    name = f"blk.{l}.{nm}.weight"
+                    t = s.g.tensors[name]
+                    per = t.nbytes // int(t.dims[-1])
+                    s.g.prefetch_range(name, int(e) * per, per)
         for e in range(s.ne):
             rows = np.nonzero((top == e).any(axis=1))[0]
             if rows.size == 0:

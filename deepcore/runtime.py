@@ -40,7 +40,7 @@ class Env:
                                        writer=writer, cache_pages=kv_cache_pages)
         else:
             s.vram = connect_tier(s.vram_repo, TAG_VRAM, s.token, cache_pages=cache_pages,
-                                  disk_cache=disk_cache, maxrun=16, backend=s.vram_backend,
+                                  disk_cache=disk_cache, maxrun=16, workers=32, backend=s.vram_backend,
                                   middle_url=s.middle_url, middle_token=s.middle_token)
             s.ram = connect_tier(s.ram_repo, TAG_RAM, s.token, journal_tag=TAG_RAM_J,
                                  writer=writer, cache_pages=kv_cache_pages,

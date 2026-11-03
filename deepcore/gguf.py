@@ -305,6 +305,10 @@ class GGUFOnRam:
         off = max(0, min(off, t.nbytes)); n = min(n, t.nbytes - off)
         return s.ram.read(t.addr + off, n)
 
+    def prefetch_range(s, name, off, n):
+        t = s.tensors[name]
+        s.ram.prefetch(t.addr + max(0, off), min(n, max(0, t.nbytes - off)))
+
     def dequant_tensor(s, name):
         return dequant(s.read_tensor(name), s.tensors[name].type)
 
