@@ -1,0 +1,7 @@
+# deeprepo keeper: stateless 24/7 control plane (PAT -> dispatch/compact/budget).
+# Deploy as a WORKER service on Koyeb; no ports, no volume.
+FROM python:3.12-slim
+WORKDIR /app
+COPY deepcore ./deepcore
+ENV PYTHONPATH=/app PYTHONUNBUFFERED=1
+CMD ["python", "-m", "deepcore", "keeper", "--loop", "--interval", "600"]

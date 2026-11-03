@@ -35,4 +35,15 @@ jobs:
             ghcr.io/${{ github.repository }}-middle:${{ github.sha }}
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
-            org.opencontainers.image.description=deeprepo middleman and keeper
+            org.opencontainers.image.description=deeprepo middleman
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.keeper
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository }}-keeper:latest
+            ghcr.io/${{ github.repository }}-keeper:${{ github.sha }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.description=deeprepo keeper
