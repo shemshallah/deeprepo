@@ -86,12 +86,13 @@ def dq_q5_k(b):
 
 
 def dq_q6_k(b):
+    """block_q6_K: ql[128], qh[64], scales[16], d(fp16) LAST (ggml-common.h)."""
     nb = len(b) // 210
     a = np.frombuffer(b[:nb * 210], np.uint8).reshape(nb, 210)
-    d = a[:, 0:2].copy().view("<f2").astype(np.float32).reshape(-1)  # (nb,)
-    ql = a[:, 2:130].reshape(nb, 2, 2, 32)                  # [blk, c(128-chunk), half, l]
-    qh = a[:, 130:194].reshape(nb, 2, 32)
-    sc = a[:, 194:210].copy().view(np.int8).astype(np.float32).reshape(nb, 2, 8)
+    d = a[:, 208:210].copy().view("<f2").astype(np.float32).reshape(-1)  # (nb,)
+    ql = a[:, 0:128].reshape(nb, 2, 2, 32)                  # [blk, c(128-chunk), half, l]
+    qh = a[:, 128:192].reshape(nb, 2, 32)
+    sc = a[:, 192:208].copy().view(np.int8).astype(np.float32).reshape(nb, 2, 8)
     isx = (np.arange(32) // 16)                             # per-l scale sub-index
     out = np.empty((nb, 2, 4, 32), np.float32)
     lo0 = (ql[:, :, 0, :] & 0xF).astype(np.float32)

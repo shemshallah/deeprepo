@@ -75,8 +75,8 @@ def ref_q6_k(x):
     nb = len(x) // 210
     for i in range(nb):
         b = x[i * 210:(i + 1) * 210]
-        d = f16(b[0:2])
-        ql, qh, sc = b[2:130], b[130:194], b[194:210]
+        d = f16(b[208:210])          # block_q6_K: d is last
+        ql, qh, sc = b[0:128], b[128:192], b[192:208]
         pos = 0
         for n in range(0, 256, 128):
             for l in range(32):
