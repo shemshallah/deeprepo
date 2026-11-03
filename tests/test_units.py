@@ -82,7 +82,7 @@ def test_tokenizer_roundtrip():
     toks = [chr(0x100 + i) for i in range(8)]  # filler ids
     toks += [b2u[b] for b in range(256)]
     toks[0] = "<|im_start|>"; toks[1] = "<|im_end|>"; toks[2] = "<|endoftext|>"
-    ty = [3, 3, 3] + [1] * (len(toks) - 3)
+    ty = [1, 1, 1] + [1] * (len(toks) - 3)   # type NORMAL: fallback must bind known names
     from deepcore.tok import QWEN2_PRE
     tk = BPETokenizer(toks, ty, [], QWEN2_PRE)
     s = "hello, world! 123\nnew line"
@@ -106,7 +106,7 @@ def test_gguf_writer_reader_roundtrip():
                [("a", [32, 6], 0, x), ("b", [16], 1, y), ("c", [32, 4], 8, rng.standard_normal((4, 32)).astype(np.float32))])
     f = open(p, "rb").read()
     meta, tensors, data_off, _ = parse_header(lambda o, n: f[o:o + n], len(f))
-    assert meta["general.architecture"] == "qwen3moe" and meta["x"] == 4 and meta["arr"] == ("array", 4, 3)
+    assert meta["general.architecture"] == "qwen3moe" and meta["x"] == 4 and meta["arr"] == [1, 2, 3]
     a = dequant(f[tensors["a"].addr:tensors["a"].addr + tensors["a"].nbytes], 0).reshape(6, 32)
     assert np.allclose(a, x)
     b = dequant(f[tensors["b"].addr:tensors["b"].addr + tensors["b"].nbytes], 1).reshape(16)

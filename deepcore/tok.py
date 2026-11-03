@@ -42,6 +42,10 @@ class BPETokenizer:
                 s.ranks[(parts[0], parts[1])] = r
         s.rx = _compile(pre)
         s.special = {t: i for i, (t, ty) in enumerate(zip(s.vocab, s.ty)) if ty in (3, 4) and t.startswith("<|")}
+        # some GGUFs type ChatML controls as NORMAL; bind known names explicitly
+        for n in ("<|im_start|>", "<|im_end|>", "<|endoftext|>"):
+            if n in s.str2id:
+                s.special.setdefault(n, s.str2id[n])
 
     @classmethod
     def from_meta(s, meta):

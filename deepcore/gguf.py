@@ -160,8 +160,14 @@ def _val_keep(c, t):
         if et == 8:
             return [c.str() for _ in range(n)]
         if et in _SC:
-            c.take(struct.calcsize(_SC[et]) * n)
-            return ("array", et, n)
+            # retain scalar arrays (token_type etc.); cap absurd sizes
+            if n > 20_000_000:
+                c.take(struct.calcsize(_SC[et]) * n)
+                return ("array", et, n)
+            fmt = _SC[et]
+            sz = struct.calcsize(fmt)
+            raw = c.take(sz * n)
+            return list(struct.unpack("<" + fmt[1] * n, raw))
         for _ in range(n):
             _val_keep(c, et)
         return ("array", et, n)
