@@ -210,7 +210,13 @@ def import_model(vram_store, jstore, hf, budget=None, resume=True, work="/tmp", 
             pos, to_read = bin_src, (hi - lo) * PAGE
             while to_read > 0:
                 k = min(8 << 20, to_read)
-                data = hf.read(pos, k)
+                avail = max(0, hf.size - pos)
+                if avail == 0:
+                    data = b"\0" * k  # final page is not page-aligned: pad zeros
+                else:
+                    data = hf.read(pos, min(k, avail))
+                    if len(data) < k:
+                        data = data + b"\0" * (k - len(data))
                 f.write(data)
                 sha.update(data)
                 pos += k
