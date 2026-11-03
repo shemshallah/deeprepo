@@ -5,6 +5,7 @@ KV + handoff state through reporam, streams weights through repovram pages, writ
 generated tokens back as journal deltas, and either completes or hands off.
 """
 import json
+import os
 import sys
 import time
 
@@ -219,11 +220,18 @@ def main(argv):
     ap.add_argument("--shift-minutes", type=int, default=20)
     ap.add_argument("--shift-tokens", type=int, default=64)
     ap.add_argument("--max-shifts", type=int, default=1)
-    ap.add_argument("--cache-pages", type=int, default=768)
+    ap.add_argument("--cache-pages", type=int, default=2048)
     ap.add_argument("--kv-cache-pages", type=int, default=256)
     ap.add_argument("--strict", action="store_true")
     a = ap.parse_args(argv)
     from .runtime import Env
+    # clamp the page cache to what this VM can actually hold (public runners: 16 GiB)
+    try:
+        ram_gb = os.sysconf("SC_PHYS_PAGES") * os.sysconf("SC_PAGE_SIZE") / 2**30
+        a.cache_pages = max(256, min(a.cache_pages, int((ram_gb - 5) * 256)))
+        print(f"runner RAM {ram_gb:.1f} GiB -> page cache {a.cache_pages} pages ({a.cache_pages*4/1024:.1f} GiB)", flush=True)
+    except Exception:
+        pass
     env = Env(writer=(a.op == "run"), cache_pages=a.cache_pages, kv_cache_pages=a.kv_cache_pages)
     env.runner_name = __import__("os").environ.get("RING_SLOT") or "deeprepo-cpu-?"
     if a.op == "drain":

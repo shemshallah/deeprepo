@@ -10,6 +10,7 @@ SiLU-gated experts with softmax top-k renorm, merged 3-D expert tensors (per-exp
 are byte-contiguous -> per-expert paging).
 """
 import json
+import os
 import time
 
 import numpy as np
@@ -266,12 +267,17 @@ class Qwen3MoE:
     def forward(s, ids, pos0):
         """Prefill/decode ids at positions pos0.. Return logits for the last position."""
         X = s._embd_rows(ids)
+        progress = os.environ.get("DEEPREPO_PROGRESS") == "1"
+        t_layer = time.time()
         for l in range(s.L):
             xn = rms(X, s._w(f"blk.{l}.attn_norm.weight").astype(np.float32), s.eps)
             attn = s._attn(l, xn, pos0, xn.shape[0])
             X = X + attn
             xn2 = rms(X, s._w(f"blk.{l}.ffn_norm.weight").astype(np.float32), s.eps)
             X = X + s._moe(l, xn2)
+            if progress and (l % 8 == 7 or l == s.L - 1):
+                print(f"layer {l+1}/{s.L} {(time.time()-t_layer)/8:.2f}s/layer "
+                      f"vram={s.st['vram_bytes']/2**30:.1f}GiB", flush=True)
         xn = rms(X[-1:], s._w("output_norm.weight").astype(np.float32), s.eps)
         logits = s._logits(xn)
         s.st["tokens"] += len(ids)

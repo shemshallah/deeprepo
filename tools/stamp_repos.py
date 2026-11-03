@@ -50,6 +50,7 @@ env:
   # dies with the VM; on a self-hosted runner with `clean: false` it survives across jobs.
   DEEPREPO_DISK_CACHE: ${{ github.workspace }}/tiers/l0.5
   DEEPREPO_DISK_CACHE_GB: "8"
+  DEEPREPO_PROGRESS: "1"
 
 jobs:
   runner:
@@ -84,7 +85,7 @@ jobs:
         working-directory: core
         run: |
           set -euo pipefail
-          python -m deepcore.worker "${{ inputs.op }}" --job "${{ inputs.job }}" --shift-minutes "${{ inputs.minutes }}" --shift-tokens 32 --max-shifts 4 --cache-pages 1024 --kv-cache-pages 192
+          python -m deepcore.worker "${{ inputs.op }}" --job "${{ inputs.job }}" --shift-minutes "${{ inputs.minutes }}" --shift-tokens 32 --max-shifts 4 --cache-pages 2048 --kv-cache-pages 192
 """
 
 CPU_README = """# {name}
