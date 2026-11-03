@@ -82,7 +82,7 @@ jobs:
     env:
       # All writers must be dispatched through this single repository. GitHub
       # concurrency groups are repository-scoped, not account-global.
-      RAM16_COORDINATOR_REPO: ${{ vars.RAM16_COORDINATOR_REPO }}
+      RAM16_COORDINATOR_REPO: ${{ vars.RAM16_COORDINATOR_REPO || github.repository }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
