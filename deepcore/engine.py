@@ -9,6 +9,7 @@ Follows src/models/qwen3moe.cpp: RMSNorm, Q/K per-head RMSNorm (before NEOX rope
 SiLU-gated experts with softmax top-k renorm, merged 3-D expert tensors (per-expert slices
 are byte-contiguous -> per-expert paging).
 """
+import collections
 import json
 import os
 import time
@@ -47,7 +48,7 @@ def softmax(x, axis=-1):
 
 class Qwen3MoE:
     def __init__(s, vram, wbase_page, model_size, ramkv=None, kv_layout=None,
-                 f16_cache_mb=2560, chunk=256, strict=False):
+                 f16_cache_mb=2560, chunk=256, strict=False, expert_cache_mb=512):
         s.v, s.kv = vram, ramkv
         s.g = G.GGUFOnRam(vram, wbase_page, model_size)
         meta, arch = s.g.meta, s.g.meta["general.architecture"]
@@ -77,6 +78,10 @@ class Qwen3MoE:
                     (s.kv_stride // 2) // s.rep if s.kv_stride else 4096)
         # L0 dequant cache (f16)
         s.cache, s.cache_bytes, s.cache_cap = {}, 0, int(f16_cache_mb) << 20
+        # hot-expert cache: frequency-aware, survives across tokens (routing is skewed)
+        s.ecache, s.ecache_bytes = {}, 0
+        s.ecache_cap = int(expert_cache_mb) << 20
+        s.ecount = collections.Counter()
         s.head = None  # output head f16, loaded in bounded chunks (never an f32 copy)
         # per-expert slice geometry from merged 3-D tensors
         s.expert_bytes = {}
@@ -117,7 +122,15 @@ class Qwen3MoE:
 
     def _expert(s, layer, nm, e):
         """Dequantize one expert slice of a merged 3-D tensor, paged straight from repovram.
-        Slice size is derived from THIS tensor (Q4_K_M mixes Q4_K/Q6_K per layer)."""
+        Slice size is derived from THIS tensor (Q4_K_M mixes Q4_K/Q6_K per layer).
+        Hot experts are kept in an LFU f16 cache to cut repeat paging/dequant."""
+        key = (layer, nm, e)
+        c = s.ecache.get(key)
+        if c is not None:
+            s.ecount[key] += 1
+            s.st["expert_cache_hits"] += 1
+            return c.astype(np.float32)
+        s.st["expert_cache_misses"] += 1
         t = s.g.tensors[f"blk.{layer}.{nm}.weight"]
         ne_t = int(t.dims[-1])                      # expert count on the last axis
         per = t.nbytes // ne_t                      # contiguous expert slice
@@ -127,7 +140,17 @@ class Qwen3MoE:
         s.st["vram_bytes"] += n
         w = G.dequant(s.g.read_range(f"blk.{layer}.{nm}.weight", off, n), t.type)
         rows = int(t.dims[1])                       # gate/up: n_ff; down: n_embd
-        return w.reshape(rows, int(t.dims[0]))
+        w = w.reshape(rows, int(t.dims[0]))
+        s.ecount[key] += 1
+        if not s.strict and s.ecache_cap > 0:
+            w16 = w.astype(np.float16)
+            while s.ecache_bytes + w16.nbytes > s.ecache_cap and s.ecache:
+                k0 = min(s.ecache, key=lambda k: s.ecount[k])
+                s.ecache_bytes -= s.ecache[k0].nbytes
+                del s.ecache[k0]
+            s.ecache[key] = w16
+            s.ecache_bytes += w16.nbytes
+        return w
 
     def _load_head(s):
         """Dequantize the output (lm) head into f16 in bounded chunks: no 1.2 GiB f32 transient."""
@@ -323,4 +346,6 @@ class Qwen3MoE:
         d["l0_cache_bytes"] = s.cache_bytes
         d["l0_cache_tensors"] = len(s.cache)
         d["l0_cap_bytes"] = s.cache_cap
+        d["expert_cache_bytes"] = s.ecache_bytes
+        d["expert_cache_entries"] = len(s.ecache)
         return d
