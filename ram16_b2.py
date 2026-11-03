@@ -118,7 +118,7 @@ class B2RAM:
 
     def _check_writer_authority(self):
         if not self.writer: return
-        coordinator = os.getenv("RAM16_COORDINATOR_REPO", "").strip()
+        coordinator = (os.getenv("RAM16_COORDINATOR_REPO") or os.getenv("GITHUB_REPOSITORY", "")).strip()
         current = os.getenv("GITHUB_REPOSITORY", "").strip()
         if os.getenv("RAM16_ALLOW_LOCAL_WRITES") == "1" and not current:
             return  # explicit escape hatch for controlled local administration/tests
