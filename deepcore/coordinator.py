@@ -80,7 +80,7 @@ class Coordinator:
                 if len(failed) >= len(ring.RING):
                     break
                 continue
-            ring.Lease.grant(regs, runner, minutes=max_shift_minutes * 4 + 15)  # resident writer
+            ring.Lease.grant(regs, runner, minutes=max_shift_minutes + 10)  # renewed per internal shift
             s.status.update(s.env, runner=runner, phase=f"shift {job_id}")
             s._dispatch(runner, "run", job=job_id, minutes=max_shift_minutes)
             current = runner

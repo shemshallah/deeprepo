@@ -57,6 +57,21 @@ def op_run(env, job_id, shift_minutes=20, shift_tokens=64, max_shifts=1, log=_lo
     import numpy as np
     regs = env.regs
     runner = env.runner_name
+    try:
+        return _run_shift(env, job_id, shift_minutes, shift_tokens, max_shifts, log)
+    except BaseException:
+        try:
+            ring.Lease.free(regs, runner)
+        except Exception:
+            pass
+        raise
+
+
+def _run_shift(env, job_id, shift_minutes, shift_tokens, max_shifts, log):
+    from . import ring
+    import numpy as np
+    regs = env.regs
+    runner = env.runner_name
     lease = ring.Lease.assert_held(regs, runner)
     job = regs.get(f"job/{job_id}")
     if not job:

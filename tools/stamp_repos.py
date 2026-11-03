@@ -45,7 +45,7 @@ env:
   DEEPREPO_VRAM_BACKEND: ${{ vars.VRAM_BACKEND || 'github' }}
   DEEPREPO_MIDDLE_URL: ${{ vars.MIDDLE_URL }}
   DEEPREPO_MIDDLE_TOKEN: ${{ secrets.MIDDLE_TOKEN }}
-  RING_SLOT: ${{ github.event.repository.name }}
+  RING_SLOT: ${{ github.repository }}
   # L0.5: real files created inside the workspace. On hosted runners this is scratch that
   # dies with the VM; on a self-hosted runner with `clean: false` it survives across jobs.
   DEEPREPO_DISK_CACHE: ${{ github.workspace }}/tiers/l0.5
