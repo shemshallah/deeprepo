@@ -119,11 +119,13 @@ class Coordinator:
 
     # ---------------- chat ----------------
 
-    def serve_issue(s, req, minutes=300, max_tokens=512):
+    def serve_issue(s, req, minutes=300, max_tokens=None):
         env, regs = s.env, s.env.regs
         if env.budget.exhausted():
             raise BudgetExceeded("daily budget exhausted")
         tok = env.tokenizer()
+        if max_tokens is None:
+            max_tokens = int(os.environ.get("MAX_REPLY_TOKENS", "48"))
         ids = tok.chat_ids(req.messages)
         job_id = f"j{int(time.time())}"
         left = max(1, min(max_tokens, env.budget.caps["tokens"] - env.budget.today["tokens"]))
