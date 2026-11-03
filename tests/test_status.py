@@ -30,7 +30,7 @@ def test_render_and_threshold():
     b.enabled = True
     b.quota = lambda ttl=60: (3241, 5000)
     body = b.render(Env(), runner="deeprepo-cpu-3", phase="serving")
-    for needle in ("Runner", "deeprepo-cpu-3", "3241 / 5000", "v-ckpt-7", "Journal seq 142",
+    for needle in ("Runner", "deeprepo-cpu-3", "3241 / 5000", "v-ckpt-7", "**Journal seq** 142",
                    "Uptime", "Gate** pass"):
         assert needle in body, (needle, body)
     assert "paused" not in body
