@@ -80,6 +80,7 @@ def bootstrap(vram_store, ram_store, kv_pages=1024, reg_pages=256, force=False, 
             continue
         p = os.path.join("/tmp", f"dpr-{tier}-bin0.bin")
         n = forge_bin0(p, tier, layout)
+        _remove_blob(store, "mem-00.bin")
         store.put_file("mem-00.bin", p)
         os.remove(p)
         log(f"bootstrapped {store.repo}:{store.tag} (bin0 {n} B, layout {layout})")
@@ -190,14 +191,19 @@ def import_model(vram_store, jstore, hf, budget=None, resume=True, work="/tmp", 
         t0 = time.time()
         sb_page = None
         if b == 0:
-            # fresh runner: fetch the bootstrap superblock page so the import cannot wipe it
+            # preserve the bootstrap superblock page; if it is missing/not DPRSB1, regenerate
+            # it deterministically (never ship a weights bin without a valid superblock).
             try:
                 a = vram_store.asset(name)
                 probe = a.read(BIN_HDR, 8)
                 if probe == b"DPRSB1":
                     sb_page = probe + a.read(BIN_HDR + 8, PAGE - 8)
+                    log("import: preserved the vram superblock page")
             except Exception as e:
                 log(f"import: warning: could not fetch existing superblock page: {e!r}")
+            if not sb_page:
+                sb_page = pack_super("vram", plan_vram_layout(tier_pages()))
+                log("import: regenerated the vram superblock page")
         with open(path, "r+b" if exists else "wb") as f:
             if not exists:
                 f.truncate(size)
