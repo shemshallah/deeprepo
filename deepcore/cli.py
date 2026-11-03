@@ -122,14 +122,21 @@ def cmd_keeper(env, loop=False, interval=600):
             print(json.dumps(out))
         if not loop:
             return 0
-        _t.sleep(max(60, int(interval)))
+        _t.sleep(1800 if out.get("quota_paused") else max(60, int(interval)))
 
 
 def _keeper_tick(env):
     from . import ring
+    from .status import StatusBoard
     import os, time
     regs = env.regs
+    board = StatusBoard(env.main_repo, env.token)
     out = {"t": int(time.time())}
+    if board.enabled and board.quota_low():
+        out["action"] = "paused: API quota >=80% used (20% remaining)"
+        out["quota_paused"] = True
+        board.update(env, phase="paused — API quota; sleeping 30m")
+        print(json.dumps(out)); return out
     if env.budget.exhausted():
         out["action"] = "paused: budget exhausted"
         print(json.dumps(out))
@@ -161,6 +168,8 @@ def _keeper_tick(env):
                     out["action"] = f"dispatch failed: {e!r}"
             else:
                 out["action"] = "idle: fresh + gate ok (dispatch disabled)"
+    if board.enabled:
+        board.update(env, phase=str(out.get("action", "idle")))
     print(json.dumps(out, indent=2))
     return out
 

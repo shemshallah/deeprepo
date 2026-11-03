@@ -13,6 +13,7 @@ import ram16
 
 from . import ring
 from .meter import BudgetExceeded
+from .status import StatusBoard
 
 POLL = 6.0
 
@@ -22,6 +23,7 @@ class Coordinator:
         s.env, s.log = env, log
         s.health = env.regs.get("ring/health") or {}
         s.token = env.token
+        s.status = StatusBoard(env.main_repo, env.token, log=log)
 
     # ---------------- ring plumbing ----------------
 
@@ -39,6 +41,7 @@ class Coordinator:
         c = ring.await_run(repo, "runner.yml", s.token, timeout=timeout, poll=15)
         ok = c == "success"
         s.health[repo] = {"ok": ok, "t": int(time.time()), "conclusion": c, "mode": op}
+        s.status.update(s.env, runner=repo, phase=f"{op} {'ok' if ok else 'failed'}")
         h = dict(s.env.regs.get("ring/health") or {})
         h[repo] = s.health[repo]
         s.env.regs.put("ring/health", h)
@@ -66,6 +69,8 @@ class Coordinator:
         seen, text, failed = set(), "", set()
         current = first_runner
         while time.time() < deadline:
+            if s.status.enabled and s.status.quota_low():
+                s.status.pause(s.env, minutes=int(os.environ.get("QUOTA_PAUSE_MINUTES", "30")))
             runner = current if (current and current not in failed) else s.pick(current, exclude=failed)
             if not s.prewarm(runner):
                 failed.add(runner)
@@ -74,6 +79,7 @@ class Coordinator:
                     break
                 continue
             ring.Lease.grant(regs, runner, minutes=max_shift_minutes * 4 + 15)  # resident writer
+            s.status.update(s.env, runner=runner, phase=f"shift {job_id}")
             s._dispatch(runner, "run", job=job_id, minutes=max_shift_minutes)
             current = runner
             last_tick = 0.0
@@ -95,11 +101,13 @@ class Coordinator:
                 if regs.get(f"run/{job_id}/done"):
                     if on_token:
                         on_token(text)
+                    s.status.update(s.env, runner=runner, phase="idle — reply complete")
                     return True, text
                 lease = regs.get("ring/lease") or {}
                 expired = lease.get("until", 0) < time.time() - 60
                 if (lease.get("holder") is None or expired) and time.time() - last_tick > 2.0 and (
                         seen or regs.get(f"ring/packet/{job_id}")):
+                    s.status.update(s.env, runner=runner, phase="handoff")
                     break  # job ended (or the writer died); rotate
                 if time.time() >= deadline:
                     return False, text
@@ -145,7 +153,10 @@ class Coordinator:
         q = s.queue = ram16.IssueQueue(env.main_repo, s.token, "deeprepo-chat")
         deadline = time.time() + minutes * 60
         env.regs.refresh()
+        s.status.update(env, phase="serving — waiting for an issue")
         while time.time() < deadline - 60:
+            if s.status.enabled and s.status.quota_low():
+                s.status.pause(env, minutes=int(os.environ.get("QUOTA_PAUSE_MINUTES", "30")))
             if env.budget.exhausted():
                 s.log("budget exhausted; pausing serves")
                 break
