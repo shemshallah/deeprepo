@@ -26,6 +26,19 @@ The model is 17.28 GiB; a hosted runner has ~14 GB of SSD. It does not fit. An 8
 page cache is used instead, which is why decode hits ~86% of pages (measured 163 MB/token
 network) — the remaining misses still cost a CDN round trip per 4 MiB page.
 
+## Hardware tiers (what a sponsor buys)
+
+| tier | hardware | what fits | expected decode |
+|---|---|---|---|
+| classic (now) | 4 vCPU / 16 GiB / 14 GB SSD | nothing: Q4 pages from CDN | **0.05 tok/s** |
+| storage sponsor | + 50–100 GB SSD | Q4 on disk (mmap/page cache) | 0.2–0.8 tok/s |
+| **RAM sponsor** | 32–64 GiB RAM | Q4/Q5/Q6 fully in RAM | **2–10 tok/s** (CPU-bound) |
+| GPU sponsor | 24 GB VRAM | Q4-Q8 in VRAM | **30–100 tok/s** |
+
+A RAM offer is worth more than storage; a GPU offer changes the demo from "impossible
+paging" to "usable chat". Keep the hosted classic tier as the proof and run the gold tier
+for daily use.
+
 ## Faster options (trade quality/claims)
 
 | option | size | effect |
@@ -34,6 +47,9 @@ network) — the remaining misses still cost a CDN round trip per 4 MiB page.
 | Q2_K | ~12 GiB | same fit, lower quality |
 | Q4_K_M (current) | 17.28 GiB | **does not fit RAM or disk**; proves the sparse repo-VRAM claim at 0.05 tok/s |
 | prefix KV reuse | — | reuses the previous turn's KV instead of re-prefilling the whole chat history |
+| 1 MiB pages | same model | 4 MiB pages over-fetch ~4x per expert slice; a 1 MiB page format needs a re-import but cuts decode bytes ~2–4x |
+| hot-expert pinning | — | route-frequency pinning keeps the hottest experts in RAM; 1.5–2x decode |
+| speculative decoding | +0.6B draft | propose K tokens with a small model, verify in one 30B forward; 2–3x, complex |
 
 `03-load-model` accepts any single-file GGUF URL; switching to Q3_K_M is a re-import plus a
 `vram/model` record update. Keep Q4 if the point is "it cannot fit anywhere".

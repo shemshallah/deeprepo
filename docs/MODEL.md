@@ -41,6 +41,8 @@ with a clear error.
 | Qwen3-30B-A3B-Instruct-2507 | ~18.6 GiB | yes, bins 0–9 | **default** |
 | Qwen3-32B (dense) | ~19.8 GiB | yes | slower: every weight is touched per token |
 | Qwen3-30B-A3B Q5_K_M | ~22 GiB | yes | better quality, higher bandwidth |
+| Qwen3-30B-A3B **Q3_K_M** | ~13 GiB | yes | fits 16 GiB RAM / 14 GB SSD → fast mode, lower quality |
+| Qwen3-30B-A3B Q2_K | ~12 GiB | yes | fastest fit, noticeably degraded |
 | Qwen3-30B-A3B Q8_0 | ~32.5 GiB | no | exceeds 8159 pages |
 | Qwen3-235B-A22B | >120 GiB | no | out of scope |
 
