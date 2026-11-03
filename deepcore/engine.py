@@ -89,7 +89,8 @@ class Qwen3MoE:
             t = s.g.tensors[f"blk.0.{nm}.weight"]
             s.expert_bytes[nm] = t.nbytes // s.ne
         s.st = dict(vram_reads=0, vram_bytes=0, expert_slice_reads=0, expert_bytes=0,
-                    kv_writes=0, kv_read_bytes=0, l0_hits=0, l0_misses=0, tokens=0, seconds=0.0)
+                    kv_writes=0, kv_read_bytes=0, l0_hits=0, l0_misses=0,
+                    expert_cache_hits=0, expert_cache_misses=0, tokens=0, seconds=0.0)
 
     # ---------- weight access ----------
 
