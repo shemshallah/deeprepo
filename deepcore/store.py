@@ -529,6 +529,7 @@ class DiskCache:
         os.makedirs(root, exist_ok=True)
         s._idx = collections.OrderedDict()   # path -> size, oldest first
         s._size = 0
+        s._lk = threading.Lock()
         s._scan()
 
     def _scan(s):
@@ -550,18 +551,19 @@ class DiskCache:
 
     def get(s, name, off, length):
         p = s._p(name, off)
-        if p not in s._idx:
-            return None
-        try:
-            with open(p, "rb") as f:
-                b = f.read()
-        except OSError:
-            s._forget(p)
-            return None
-        if len(b) != length:
-            s._forget(p)
-            return None
-        s._idx.move_to_end(p)
+        with s._lk:
+            if p not in s._idx:
+                return None
+            try:
+                with open(p, "rb") as f:
+                    b = f.read()
+            except OSError:
+                s._forget(p)
+                return None
+            if len(b) != length:
+                s._forget(p)
+                return None
+            s._idx.move_to_end(p)
         try:
             os.utime(p, None)
         except OSError:
@@ -578,12 +580,13 @@ class DiskCache:
             os.replace(tmp, p)
         except OSError:
             return
-        if p in s._idx:
-            s._size -= s._idx[p]
-        s._idx[p] = len(data)
-        s._size += len(data)
-        s._idx.move_to_end(p)
-        s._trim()
+        with s._lk:
+            if p in s._idx:
+                s._size -= s._idx[p]
+            s._idx[p] = len(data)
+            s._size += len(data)
+            s._idx.move_to_end(p)
+            s._trim()
 
     def _forget(s, p):
         s._size -= s._idx.pop(p, 0)
@@ -602,7 +605,8 @@ class DiskCache:
                 pass
 
     def stats(s):
-        return {"files": len(s._idx), "bytes": s._size, "cap": s.cap}
+        with s._lk:
+            return {"files": len(s._idx), "bytes": s._size, "cap": s.cap}
 
 
 class CachedAsset:
