@@ -3,6 +3,7 @@
 FROM python:3.12-slim
 WORKDIR /app
 COPY deepcore ./deepcore
+COPY ram16.py ./ram16.py
 ENV PYTHONPATH=/app PYTHONUNBUFFERED=1
 VOLUME ["/data"]
 EXPOSE 8080
