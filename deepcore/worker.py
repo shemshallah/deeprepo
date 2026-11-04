@@ -219,7 +219,12 @@ def op_selftest(env):
 def op_chat(env, issue, model=None, max_tokens=48, log=_log):
     """Batch mode: answer one issue with local KV (no reporam/journal writes)."""
     from . import batch
-    env.main_repo = env.main_repo or os.environ.get("GITHUB_REPOSITORY", "")
+    repo = env.main_repo or os.environ.get("GITHUB_REPOSITORY", "")
+    owner = (repo.split("/")[0] if "/" in repo else os.environ.get("GITHUB_REPOSITORY_OWNER", ""))
+    if not repo or "deeprepo-cpu-" in repo:      # batch jobs run in a CPU repo
+        repo = f"{owner}/deeprepo" if owner else repo
+    env.main_repo = repo
+    log(f"chat: repo={repo} issue={issue} model={model or 'default'}")
     txt = batch.answer(env, issue, model_key=model or None, max_tokens=max_tokens, log=log)
     return {"ok": True, "chars": len(txt)}
 

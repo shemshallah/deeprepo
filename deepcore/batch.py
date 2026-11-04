@@ -56,9 +56,13 @@ def _api(repo, token, path, method="GET", body=None):
     data = json.dumps(body).encode() if body is not None else None
     if data:
         h["Content-Type"] = "application/json"
-    rq = urllib.request.Request(f"https://api.github.com/repos/{repo}{path}", data=data, headers=h, method=method)
-    with urllib.request.urlopen(rq, timeout=60) as r:
-        b = r.read()
+    url = f"https://api.github.com/repos/{repo}{path}"
+    rq = urllib.request.Request(url, data=data, headers=h, method=method)
+    try:
+        with urllib.request.urlopen(rq, timeout=60) as r:
+            b = r.read()
+    except urllib.error.HTTPError as e:
+        raise IOError(f"{e.code} {url}") from e
     return json.loads(b) if b else None
 
 
