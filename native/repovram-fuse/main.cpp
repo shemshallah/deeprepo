@@ -68,6 +68,7 @@ public:
                 headers = curl_slist_append(headers, ("Authorization: Bearer " + token_).c_str());
             curl_easy_setopt(c, CURLOPT_URL, url.c_str());
             curl_easy_setopt(c, CURLOPT_FOLLOWLOCATION, 1L);
+            curl_easy_setopt(c, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_1_1);
             curl_easy_setopt(c, CURLOPT_MAXREDIRS, 5L);
             curl_easy_setopt(c, CURLOPT_RANGE, range.c_str());
             curl_easy_setopt(c, CURLOPT_WRITEFUNCTION, write_cb);
