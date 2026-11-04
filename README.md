@@ -114,6 +114,14 @@ This is out-of-core inference over a CDN, not local inference. Rough expectation
 expert-cache luck, ~32 tokens per 20-minute shift. Quality is the real Qwen3-30B-A3B's;
 throughput is the price of running it on memory that doesn't exist locally.
 
+**Native C++ reader (`native/repovram-fuse`)** replaces the Python FUSE path. It uses
+libcurl keep-alive range reads, `kernel_cache`, and pins pages after 3 hits (hot-page
+pinning, `--pin-pages`), writing a heatmap to `/tmp/repovram-fuse-heat.tsv` on unmount.
+Build with `cmake -S native/repovram-fuse -B build && cmake --build build`; mount with
+`repovram-fuse MOUNT --repo OWNER/repovram --tag repovram --base PAGE --size BYTES
+--cache-pages 512 --pin-pages 256`. `10-native-fuse-30b` benchmarks it. It also passes
+`--fit off` to llama.cpp so the fit pass does not load the model twice.
+
 **Measured 30B Q4 llama.cpp benchmark (`09-llama-30b`)** — FUSE-exposed repovram file,
 mmap'd by llama.cpp: **0.225 tok/s decode (4.45 s/token)**, **0.78 tok/s prefill**,
 136 s model load, 33.7 GiB read through FUSE (256-page cache). That is **~5× faster
