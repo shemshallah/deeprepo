@@ -1,5 +1,6 @@
 // Read-only FUSE file over repovram release bins, for llama.cpp mmap.
 // Native reader: libcurl range pages + kernel page cache + hot-page pinning.
+#define FUSE_USE_VERSION 35
 #include <fuse3/fuse.h>
 #include <curl/curl.h>
 
