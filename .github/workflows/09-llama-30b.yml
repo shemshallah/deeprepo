@@ -46,7 +46,7 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update -qq
-          sudo apt-get install -y -qq fuse3 libfuse2t64 || sudo apt-get install -y -qq fuse3 libfuse2
+          sudo apt-get install -y -qq fuse3 fuse libfuse2t64 || sudo apt-get install -y -qq fuse3 fuse libfuse2
           test -c /dev/fuse
           curl -fsSL https://github.com/ggml-org/llama.cpp/releases/download/b12098/llama-b12098-bin-ubuntu-x64.tar.gz -o /tmp/llama.tar.gz
           tar xzf /tmp/llama.tar.gz -C /tmp
@@ -56,9 +56,11 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p /tmp/mnt
-          sudo -E env PYTHONPATH="$PWD" python tools/repovram_fuse.py /tmp/mnt \
+          PYTHONPATH="$PWD" python tools/repovram_fuse.py /tmp/mnt \
             --model "$MODEL" --cache-pages "${{ inputs.cache_pages }}" > /tmp/fuse.log 2>&1 &
+          FUSE_PID=$!
           for i in $(seq 1 180); do
+            if ! kill -0 "$FUSE_PID" 2>/dev/null; then cat /tmp/fuse.log; exit 1; fi
             if [ -r /tmp/mnt/model.gguf ] && [ "$(stat -c%s /tmp/mnt/model.gguf 2>/dev/null || echo 0)" -gt 0 ]; then
               echo "mounted after ${i}s: $(stat -c%s /tmp/mnt/model.gguf) bytes"
               cat /tmp/fuse.log
@@ -102,7 +104,7 @@ jobs:
           cat /tmp/fuse.log | tail -20 || true
           kill $(cat /tmp/llama.pid) 2>/dev/null || true
           sleep 2
-          sudo umount /tmp/mnt 2>/dev/null || sudo fusermount3 -u /tmp/mnt 2>/dev/null || true
+          fusermount3 -u /tmp/mnt 2>/dev/null || fusermount -u /tmp/mnt 2>/dev/null || true
 
       - name: Summary
         if: always()
