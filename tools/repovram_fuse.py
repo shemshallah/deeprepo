@@ -53,8 +53,14 @@ class RepoGGUF(Operations):
         if offset >= self.size:
             return b""
         n = min(size, self.size - offset)
-        data = self.env.vram.read(self.base * PAGE + offset, n)
+        try:
+            data = self.env.vram.read(self.base * PAGE + offset, n)
+        except Exception as e:
+            print(f"fuse: read failed offset={offset} size={size}: {e!r}", flush=True)
+            raise
         self.reads += 1
+        if self.reads <= 5:
+            print(f"fuse: read offset={offset} size={size} n={n} got={len(data)} head={data[:4].hex()}", flush=True)
         self.bytes += len(data)
         if self.reads % 256 == 0:
             print(f"fuse: {self.reads} reads, {self.bytes/2**20:.1f} MiB, "
