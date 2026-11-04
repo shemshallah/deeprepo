@@ -63,10 +63,7 @@ jobs:
             if ! kill -0 "$FUSE_PID" 2>/dev/null; then cat /tmp/fuse.log; exit 1; fi
             if [ -r /tmp/mnt/model.gguf ] && [ "$(stat -c%s /tmp/mnt/model.gguf 2>/dev/null || echo 0)" -gt 0 ]; then
               echo "mounted after ${i}s: $(stat -c%s /tmp/mnt/model.gguf) bytes"
-              python - <<'PY'
-              with open("/tmp/mnt/model.gguf", "rb") as f:
-                  print("MOUNT_HEAD", f.read(16).hex())
-              PY
+              python -c 'print("MOUNT_HEAD", open("/tmp/mnt/model.gguf","rb").read(16).hex())'
               cat /tmp/fuse.log
               exit 0
             fi
