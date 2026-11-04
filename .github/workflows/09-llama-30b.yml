@@ -56,7 +56,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p /tmp/mnt
-          env -u GH_TOKEN -u GITHUB_TOKEN PYTHONPATH="$PWD" python tools/repovram_fuse.py /tmp/mnt \
+          PYTHONPATH="$PWD" python tools/repovram_fuse.py /tmp/mnt \
             --model "$MODEL" --cache-pages "${{ inputs.cache_pages }}" > /tmp/fuse.log 2>&1 &
           FUSE_PID=$!
           for i in $(seq 1 180); do
