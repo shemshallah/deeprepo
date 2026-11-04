@@ -120,6 +120,12 @@ mmap'd by llama.cpp: **0.225 tok/s decode (4.45 s/token)**, **0.78 tok/s prefill
 decode than the custom numpy engine (0.041–0.047 tok/s)**, but still not interactive.
 The 4B fast tier remains the usable path at **~11.5 tok/s**.
 
+Tuning attempts on 30B (same 8-token benchmark): `--fit off` did not remove the double
+load (still ~35 GiB read); 4 MiB FUSE reads + 6 GiB disk cache regressed to **0.055 tok/s**;
+a 1 MiB fine reader regressed to **0.032 tok/s**; a 4 GiB FUSE cache was OOM-killed. The
+0.225 tok/s result is the stable best on a 16 GiB runner. Bigger wins need a C++ FUSE
+implementation, hot-expert pinning, or a smaller 30B quant — not more Python cache.
+
 Default daily budget (shared by all writers, persisted in registers): 96 GiB down,
 12 GiB up, 288k API calls, 24k tokens. Caps fail closed.
 

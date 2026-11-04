@@ -14,9 +14,9 @@ on:
         type: string
         default: "8"
       cache_pages:
-        description: repovram page cache inside the FUSE process
+        description: repovram page cache inside the FUSE process (256 is the stable ceiling)
         type: string
-        default: "768"
+        default: "256"
 
 permissions:
   contents: read
