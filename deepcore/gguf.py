@@ -298,6 +298,11 @@ class GGUFOnRam:
         for t in s.tensors.values():
             t.addr += s.wbase
         s.arch = s.meta.get("general.architecture", "")
+        try:
+            from .store import FineReader
+            s.fine = FineReader(ram)
+        except Exception:
+            s.fine = None
 
     def raw(s, name):
         return s.tensors[name]
@@ -306,9 +311,11 @@ class GGUFOnRam:
         t = s.tensors[name]
         return s.ram.read(t.addr, t.nbytes)
 
-    def read_range(s, name, off, n):
+    def read_range(s, name, off, n, fine=False):
         t = s.tensors[name]
         off = max(0, min(off, t.nbytes)); n = min(n, t.nbytes - off)
+        if fine and s.fine is not None:
+            return s.fine.read(t.addr + off, n)
         return s.ram.read(t.addr + off, n)
 
     def prefetch_range(s, name, off, n):

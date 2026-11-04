@@ -203,6 +203,26 @@ def test_sparse_bins_are_absent():
         shutil.rmtree(tmp)
 
 
+def test_fine_reader_matches_paged_reads():
+    """1 MiB decode blocks must be byte-identical to the 4 MiB pager, across boundaries."""
+    tmp = tempfile.mkdtemp()
+    try:
+        gguf, size, vram, ram, kv, wp = setup(tmp)
+        from deepcore.gguf import GGUFOnRam
+        g = GGUFOnRam(vram, 1, size)
+        rng = np.random.default_rng(3)
+        for name in ("blk.0.ffn_down_exps.weight", "blk.1.attn_q.weight", "token_embd.weight"):
+            t = g.tensors[name]
+            for _ in range(6):
+                off = int(rng.integers(0, max(1, t.nbytes - 300000)))
+                n = int(rng.integers(1, 300000))
+                n = min(n, t.nbytes - off)
+                assert g.read_range(name, off, n, fine=True) == g.read_range(name, off, n, fine=False)
+        print("  fine 1MiB reads match 4MiB pager")
+    finally:
+        shutil.rmtree(tmp)
+
+
 def test_prefix_kv_reuse_matches_full_prefill():
     """Encoding prompt then suffix at pos=len(prompt) must match a fresh full prefill."""
     tmp = tempfile.mkdtemp()
@@ -225,4 +245,5 @@ if __name__ == "__main__":
     test_handoff_and_compaction()
     test_sparse_bins_are_absent()
     test_prefix_kv_reuse_matches_full_prefill()
+    test_fine_reader_matches_paged_reads()
     print("engine tests passed")

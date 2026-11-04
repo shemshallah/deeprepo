@@ -139,7 +139,7 @@ class Qwen3MoE:
         s.st["expert_slice_reads"] += 1
         s.st["expert_bytes"] += n
         s.st["vram_bytes"] += n
-        w = G.dequant(s.g.read_range(f"blk.{layer}.{nm}.weight", off, n), t.type)
+        w = G.dequant(s.g.read_range(f"blk.{layer}.{nm}.weight", off, n, fine=getattr(s, "_fine_decode", False)), t.type)
         rows = int(t.dims[1])                       # gate/up: n_ff; down: n_embd
         w = w.reshape(rows, int(t.dims[0]))
         s.ecount[key] += 1
@@ -272,6 +272,7 @@ class Qwen3MoE:
         topv = np.take_along_axis(probs, top, axis=1)
         topv = topv / topv.sum(axis=1, keepdims=True)                           # renorm
         out = np.zeros((C, d), np.float32)
+        s._fine_decode = C <= 4   # decode only: 1 MiB fine reads beat 4 MiB overfetch
         if C > 4:  # prefill: fetch the layer's expert tensors in few large runs
             for nm in ("ffn_gate_exps", "ffn_up_exps", "ffn_down_exps"):
                 s.prefetch(f"blk.{l}.{nm}.weight")
@@ -350,4 +351,8 @@ class Qwen3MoE:
         d["l0_cap_bytes"] = s.cache_cap
         d["expert_cache_bytes"] = s.ecache_bytes
         d["expert_cache_entries"] = len(s.ecache)
+        try:
+            d["fine"] = s.g.fine.stats() if s.g.fine else None
+        except Exception:
+            d["fine"] = None
         return d

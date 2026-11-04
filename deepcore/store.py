@@ -254,6 +254,57 @@ class KeepAliveAsset:
                 time.sleep(min(0.25 * 2 ** k, 4))
 
 
+class FineReader:
+    """1 MiB block cache over the tier bins, bypassing 4 MiB page overfetch.
+
+    A decode token touches ~384 expert slices of 0.88–1.29 MiB each. Pulling a 4 MiB page
+    per slice wastes ~3x bytes; this reads/caches 1 MiB blocks at the exact requested range.
+    Prefill keeps using Ram16's coalesced 64 MiB runs (sequential, no overfetch benefit).
+    """
+
+    def __init__(s, ram, block=1 << 20, cap=1 << 30):
+        s.ram, s.block, s.cap = ram, block, cap
+        s.cache, s.bytes = collections.OrderedDict(), 0
+        s.lk = threading.Lock()
+        s.page, s.pps, s.hdr = ram.page, ram.pps, ram.hdr
+
+    def _read_block(s, start):
+        page = start // s.page
+        slot = page // s.pps
+        in_page = start % s.page
+        off = s.hdr + (page % s.pps) * s.page + in_page
+        n = min(s.block, s.page - in_page)
+        return s.ram.slots[slot].read(off, n)
+
+    def read(s, addr, n):
+        out = bytearray()
+        pos, end = addr, addr + n
+        while pos < end:
+            start = pos - (pos % s.block)
+            with s.lk:
+                b = s.cache.get(start)
+                if b is not None:
+                    s.cache.move_to_end(start)
+            if b is None:
+                b = s._read_block(start)
+                with s.lk:
+                    if start not in s.cache:
+                        s.cache[start] = b
+                        s.bytes += len(b)
+                        while s.bytes > s.cap and s.cache:
+                            k, v = s.cache.popitem(last=False)
+                            s.bytes -= len(v)
+            a = pos - start
+            take = min(end - pos, len(b) - a)
+            out += b[a:a + take]
+            pos += take
+        return bytes(out)
+
+    def stats(s):
+        with s.lk:
+            return {"blocks": len(s.cache), "bytes": s.bytes, "cap": s.cap}
+
+
 class Journal(RetryStore):
     """Delta/manifest journal that can be missing (empty tier) and creates itself on first write."""
 
