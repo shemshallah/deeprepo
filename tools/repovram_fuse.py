@@ -54,7 +54,7 @@ class RepoGGUF(Operations):
             return b""
         n = min(size, self.size - offset)
         try:
-            data = self.env.vram.read(self.base * PAGE + offset, n)
+            data = self.env.vram.read(self.base + offset, n)
         except Exception as e:
             print(f"fuse: read failed offset={offset} size={size}: {e!r}", flush=True)
             raise
