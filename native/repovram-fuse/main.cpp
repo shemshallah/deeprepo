@@ -132,7 +132,7 @@ class Model {
             if (it != cache_.end()) {
                 it->second.hits++;
                 lru_.splice(lru_.begin(), lru_, it->second.it);
-                if (!it->second.pinned && pin_limit_ && it->second.hits >= 2) {
+                if (!it->second.pinned && pin_limit_ && it->second.hits >= 3) {
                     size_t pinned = 0;
                     for (auto &kv : cache_) pinned += kv.second.pinned;
                     if (pinned < pin_limit_) it->second.pinned = true;
