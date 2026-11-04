@@ -1,0 +1,119 @@
+name: 09 llama 30B paged
+# Benchmark only: expose the 30B GGUF from repovram as a FUSE file and let llama.cpp
+# mmap it directly. No 17 GiB local copy. This answers the "how much faster is llama.cpp
+# than the custom numpy engine on the same paged model" question.
+on:
+  workflow_dispatch:
+    inputs:
+      model:
+        description: model key (empty = 30B active)
+        type: string
+        default: qwen3-30b-a3b-instruct-2507-q4_k_m
+      max_tokens:
+        description: decode tokens to benchmark
+        type: string
+        default: "8"
+      cache_pages:
+        description: repovram page cache inside the FUSE process
+        type: string
+        default: "768"
+
+permissions:
+  contents: read
+
+env:
+  GH_TOKEN: ${{ secrets.DEEPREPO_PAT }}
+  DEEPREPO_RAM: ${{ vars.REPORAM_REPO || format('{0}/reporam', github.repository_owner) }}
+  DEEPREPO_VRAM: ${{ vars.REPOVRAM_REPO || format('{0}/repovram', github.repository_owner) }}
+  DEEPREPO_MAIN: ${{ github.repository }}
+  DEEPREPO_RAM_BACKEND: ${{ vars.RAM_BACKEND || 'github' }}
+  DEEPREPO_VRAM_BACKEND: ${{ vars.VRAM_BACKEND || 'github' }}
+  MODEL: ${{ inputs.model }}
+
+jobs:
+  bench:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements-core.txt fusepy
+
+      - name: FUSE userspace + llama.cpp
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq fuse3 libfuse2t64 || sudo apt-get install -y -qq fuse3 libfuse2
+          test -c /dev/fuse
+          curl -fsSL https://github.com/ggml-org/llama.cpp/releases/download/b12098/llama-b12098-bin-ubuntu-x64.tar.gz -o /tmp/llama.tar.gz
+          tar xzf /tmp/llama.tar.gz -C /tmp
+          test -x /tmp/llama-b12098/llama-server
+
+      - name: Mount repovram GGUF
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/mnt
+          sudo -E env PYTHONPATH="$PWD" python tools/repovram_fuse.py /tmp/mnt \
+            --model "$MODEL" --cache-pages "${{ inputs.cache_pages }}" > /tmp/fuse.log 2>&1 &
+          for i in $(seq 1 180); do
+            if [ -r /tmp/mnt/model.gguf ] && [ "$(stat -c%s /tmp/mnt/model.gguf 2>/dev/null || echo 0)" -gt 0 ]; then
+              echo "mounted after ${i}s: $(stat -c%s /tmp/mnt/model.gguf) bytes"
+              cat /tmp/fuse.log
+              exit 0
+            fi
+            sleep 1
+          done
+          cat /tmp/fuse.log
+          exit 1
+
+      - name: Benchmark llama.cpp over FUSE
+        run: |
+          set -euo pipefail
+          /tmp/llama-b12098/llama-server -m /tmp/mnt/model.gguf \
+            --host 127.0.0.1 --port 18081 -c 2048 -t 4 -ngl 0 --jinja \
+            > /tmp/llama-server.log 2>&1 &
+          echo $! > /tmp/llama.pid
+          for i in $(seq 1 600); do
+            if curl -sf http://127.0.0.1:18081/health >/dev/null 2>&1; then echo "server healthy after ${i}s"; break; fi
+            if ! kill -0 $(cat /tmp/llama.pid) 2>/dev/null; then tail -80 /tmp/llama-server.log; exit 1; fi
+            sleep 1
+          done
+          curl -sf http://127.0.0.1:18081/health >/dev/null
+          T0=$(date +%s)
+          curl -sS --max-time 5400 -H 'Content-Type: application/json' \
+            -d "{\"model\":\"local\",\"messages\":[{\"role\":\"user\",\"content\":\"Hello\"}],\"max_tokens\":${{ inputs.max_tokens }},\"temperature\":0,\"stream\":false}" \
+            http://127.0.0.1:18081/v1/chat/completions > /tmp/bench.json
+          echo "wall=$(( $(date +%s)-T0 ))s"
+          python - <<'EOF'
+          import json
+          d=json.load(open("/tmp/bench.json"))
+          t=d.get("timings",{})
+          print("BENCH", json.dumps(t))
+          txt=(d.get("choices") or [{}])[0].get("message",{}).get("content","")
+          print("REPLY", repr(txt[:200]))
+          print(f"DECODE {t.get('predicted_per_second',0):.3f} tok/s  "
+                f"PREFILL {t.get('prompt_per_second',0):.2f} tok/s  "
+                f"tokens={t.get('predicted_n')}")
+          EOF
+          tail -20 /tmp/llama-server.log || true
+          cat /tmp/fuse.log | tail -20 || true
+          kill $(cat /tmp/llama.pid) 2>/dev/null || true
+          sleep 2
+          sudo umount /tmp/mnt 2>/dev/null || sudo fusermount3 -u /tmp/mnt 2>/dev/null || true
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "## 30B llama.cpp over repovram FUSE"
+            echo '```'
+            cat /tmp/bench.json 2>/dev/null | head -c 4000 || true
+            echo
+            tail -30 /tmp/llama-server.log 2>/dev/null || true
+            echo '--- fuse ---'
+            tail -20 /tmp/fuse.log 2>/dev/null || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
