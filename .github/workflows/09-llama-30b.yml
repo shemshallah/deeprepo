@@ -90,7 +90,7 @@ jobs:
           curl -sf http://127.0.0.1:18081/health >/dev/null
           T0=$(date +%s)
           curl -sS --max-time 5400 -H 'Content-Type: application/json' \
-            -d "{\"model\":\"local\",\"messages\":[{\"role\":\"user\",\"content\":\"Hello\"}],\"max_tokens\":${{ inputs.max_tokens }},\"temperature\":0,\"stream\":false}" \
+            -d "{\"model\":\"local\",\"messages\":[{\"role\":\"user\",\"content\":\"Tell me a short sentence about the sea.\"}],\"max_tokens\":${{ inputs.max_tokens }},\"temperature\":0,\"stream\":false}" \
             http://127.0.0.1:18081/v1/chat/completions > /tmp/bench.json
           echo "wall=$(( $(date +%s)-T0 ))s"
           python - <<'EOF'
