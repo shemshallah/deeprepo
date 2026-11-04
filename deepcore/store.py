@@ -220,7 +220,9 @@ class KeepAliveAsset:
     def read(s, off, n, tries=5):
         for k in range(tries):
             u = s.url
-            if s.token or s.api:
+            if s._sig and time.time() <= s._exp:
+                u = s._sig
+            elif s.token or s.api:
                 if not s._sig or time.time() > s._exp:
                     s._resolve()
                 u = s._sig
