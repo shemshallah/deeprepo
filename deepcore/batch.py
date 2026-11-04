@@ -72,13 +72,21 @@ def _api(repo, token, path, method="GET", body=None):
     if data:
         h["Content-Type"] = "application/json"
     url = f"https://api.github.com/repos/{repo}{path}"
-    rq = urllib.request.Request(url, data=data, headers=h, method=method)
-    try:
-        with urllib.request.urlopen(rq, timeout=60) as r:
-            b = r.read()
-    except urllib.error.HTTPError as e:
-        raise IOError(f"{e.code} {url}") from e
-    return json.loads(b) if b else None
+    for attempt in range(6):
+        rq = urllib.request.Request(url, data=data, headers=h, method=method)
+        try:
+            with urllib.request.urlopen(rq, timeout=60) as r:
+                b = r.read()
+            return json.loads(b) if b else None
+        except urllib.error.HTTPError as e:
+            if e.code in (429, 500, 502, 503, 504) and attempt < 5:
+                time.sleep(min(30, 2 ** attempt))
+                continue
+            raise IOError(f"{e.code} {url}") from e
+        except Exception:
+            if attempt >= 5:
+                raise
+            time.sleep(min(30, 2 ** attempt))
 
 
 def messages_from(title, body, comments):
@@ -319,7 +327,12 @@ def serve(env, minutes=300, max_tokens=128, model_key=None, interval=8, log=prin
     log(f"fast: serving {key} for {minutes}m on port {port}")
     try:
         while time.time() < deadline:
-            reqs = pending(repo, token, "deeprepo-chat", limit=1)
+            try:
+                reqs = pending(repo, token, "deeprepo-chat", limit=1)
+            except Exception as e:
+                log(f"fast: pending poll failed: {e!r}")
+                time.sleep(interval)
+                continue
             if not reqs:
                 time.sleep(interval)
                 continue
