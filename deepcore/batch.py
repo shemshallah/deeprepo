@@ -193,7 +193,7 @@ def _chat_stream(port, messages, max_tokens):
     rq = urllib.request.Request(f"http://127.0.0.1:{port}/v1/chat/completions",
                                 data=json.dumps(payload).encode(),
                                 headers={"Content-Type": "application/json"}, method="POST")
-    with urllib.request.urlopen(rq, timeout=900) as r:
+    with urllib.request.urlopen(rq, timeout=180) as r:
         for raw in r:
             line = raw.decode("utf-8", "replace").strip()
             if not line.startswith("data:"):
