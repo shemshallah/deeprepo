@@ -97,7 +97,7 @@ jobs:
         working-directory: core
         run: |
           set -euo pipefail
-          python -m deepcore.worker "${{ inputs.op }}" --job "${{ inputs.job }}" --shift-minutes "${{ inputs.minutes }}" --shift-tokens 32 --max-shifts 4 --cache-pages 2048 --kv-cache-pages 192
+          python -m deepcore.worker "${{ inputs.op }}" --job "${{ inputs.job }}" --shift-minutes "${{ inputs.minutes }}" --shift-tokens 32 --max-shifts 4 --cache-pages 2048 --kv-cache-pages 192 --issue "${{ inputs.issue }}" --model "${{ inputs.model }}" --max-tokens "${{ inputs.max_tokens }}"
 """
 
 CPU_README = """# {name}
