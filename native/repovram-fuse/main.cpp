@@ -98,7 +98,7 @@ public:
             if (!retry || attempt == 4) {
                 std::ostringstream e;
                 e << "HTTP " << status << " " << curl_easy_strerror(rc) << " " << name
-                  << " off=" << off;
+                  << " off=" << off << " url=" << url;
                 throw std::runtime_error(e.str());
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(300 * (1 << attempt)));

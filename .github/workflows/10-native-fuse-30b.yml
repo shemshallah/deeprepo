@@ -74,7 +74,7 @@ jobs:
           set -euo pipefail
           source /tmp/model.env
           mkdir -p /tmp/mnt
-          REPOVRAM_FUSE_HEAT=/tmp/heat.tsv /tmp/repovram-build/repovram-fuse /tmp/mnt \
+          GH_TOKEN= REPOVRAM_FUSE_HEAT=/tmp/heat.tsv /tmp/repovram-build/repovram-fuse /tmp/mnt \
             --repo "$DEEPREPO_VRAM" --tag repovram --base "$BASE" --size "$SIZE" \
             --pps 510 --ns 16 --cache-pages "${{ inputs.cache_pages }}" \
             --pin-pages "${{ inputs.pin_pages }}" > /tmp/fuse.log 2>&1 &
