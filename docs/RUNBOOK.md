@@ -95,6 +95,7 @@ workflow summary.
 | compaction | automatic between shifts when ≥48 deltas exist; also `python -m deepcore keeper` |
 | swap model | run `03 load model` with a new `url`/`key`; old bins are overwritten bin-by-bin, new `vram/model` record replaces the old |
 | re-import same model | leave `fresh` off (resume); turn it on only to force a full re-upload |
+- long replies: `05 serve` takes `max_tokens` (default 128 ≈ 40–60 min on Q3; one resident writer does 4×32-token shifts).
 | reduce bandwidth | lower `budget` caps, shorten prompts, increase `--cache-pages` (fewer refetches), or run `--strict` (no f16 cache → more page hits are re-dequantized, not refetched) |
 
 ## 5. Troubleshooting

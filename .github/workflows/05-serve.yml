@@ -13,6 +13,10 @@ on:
         description: re-dispatch a new serve window when this one ends cleanly
         type: boolean
         default: true
+      max_tokens:
+        description: reply cap per turn (128 fits one 4-shift writer job)
+        type: string
+        default: "128"
 
 permissions:
   actions: write
@@ -28,7 +32,7 @@ env:
   DEEPREPO_RAM: ${{ vars.REPORAM_REPO || format('{0}/reporam', github.repository_owner) }}
   DEEPREPO_VRAM: ${{ vars.REPOVRAM_REPO || format('{0}/repovram', github.repository_owner) }}
   DEEPREPO_MAIN: ${{ github.repository }}
-  MAX_REPLY_TOKENS: "48"
+  MAX_REPLY_TOKENS: ${{ inputs.max_tokens }}
   CHAT_MODEL: ${{ vars.CHAT_MODEL }}
   DEEPREPO_RAM_BACKEND: ${{ vars.RAM_BACKEND || 'github' }}
   DEEPREPO_VRAM_BACKEND: ${{ vars.VRAM_BACKEND || 'github' }}
