@@ -305,7 +305,8 @@ def dispatch(env, slots, limit=5, model_key=None, max_tokens=48, log=print):
             log(f"batch: could not mark issue {req['id']} busy: {e!r}")
             continue
         dispatch_workflow(slot, "runner.yml", token, {"op": "chat", "issue": str(req["id"]),
-                                                      "model": model_key or "", "minutes": "60"})
+                                                      "model": model_key or "", "minutes": "60",
+                                                      "max_tokens": str(max_tokens)})
         sent.append({"slot": slot, "issue": req["id"]})
         log(f"batch: dispatched issue {req['id']} -> {slot}")
     return sent
