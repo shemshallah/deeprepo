@@ -15,6 +15,7 @@ import numpy as np
 
 MARK = "<!--ram16-->"
 CUR = " ▌"
+BUSY = "deeprepo-busy"
 
 
 class MemKV:
@@ -108,6 +109,8 @@ def pending(repo, token, label, limit=5):
     for i in _api(repo, token, f"/issues?labels={label}&state=open&sort=created&direction=asc&per_page=50"):
         if "pull_request" in i:
             continue
+        if any((l or {}).get("name") == BUSY for l in i.get("labels", [])):
+            continue  # another slot owns this turn
         req = fetch_issue(repo, token, i["number"])
         if req:
             out.append(req)
@@ -130,6 +133,16 @@ def _update(repo, token, handle, text, done=False):
 
 def answer(env, issue, model_key=None, max_tokens=48, log=print):
     repo, token = env.main_repo, env.token
+    try:
+        return _answer(env, repo, token, issue, model_key, max_tokens, log)
+    finally:
+        try:
+            _api(repo, token, f"/issues/{issue}/labels/{BUSY}", "DELETE")
+        except Exception:
+            pass
+
+
+def _answer(env, repo, token, issue, model_key, max_tokens, log):
     req = fetch_issue(repo, token, int(issue))
     if not req:
         log(f"batch: issue {issue} has no pending user turn")
@@ -179,6 +192,11 @@ def dispatch(env, slots, limit=5, model_key=None, max_tokens=48, log=print):
     sent = []
     for slot, req in zip(slots, reqs):
         from .ring import dispatch_workflow
+        try:
+            _api(repo, token, f"/issues/{req['id']}/labels", "POST", {"labels": [BUSY]})
+        except Exception as e:
+            log(f"batch: could not mark issue {req['id']} busy: {e!r}")
+            continue
         dispatch_workflow(slot, "runner.yml", token, {"op": "chat", "issue": str(req["id"]),
                                                       "model": model_key or "", "minutes": "60"})
         sent.append({"slot": slot, "issue": req["id"]})

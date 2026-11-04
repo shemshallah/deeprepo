@@ -19,6 +19,7 @@ each runner: fetch issue -> tokenize -> page weights from repovram -> answer -> 
 - Weights still come from repovram (Q3 or Q4 via the model registry / `CHAT_MODEL`).
 - Replies are posted when generation finishes (updates every ~8 s once decoding starts);
   there is no ring handoff.
+- Each dispatched issue gets the `deeprepo-busy` label until its runner finishes; `pending` skips busy issues so a turn is never double-assigned. A crashed runner can leave the label behind — remove it manually.
 - **Don't run 05-serve and 07-batch on the same issues simultaneously** — both may answer.
   Pause 05 (cancel the serve window) while batching.
 - Per-runner memory: page cache 8 GiB + f16 cache 1.8 GiB + head 0.6 GiB + MemKV (~50 MB/turn)
