@@ -166,6 +166,47 @@ def tile_model(src_gguf, tier_dir, weight_pages, pps=PPS, page=PAGE):
 TINY = dict(L=2, d=64, nh=8, nkv=2, hd=8, nff=32, ne=4, nu=2, vocab=128, eps=1e-6, rope=1e4)
 
 
+TINY_DENSE = dict(L=2, d=64, nh=8, nkv=2, hd=8, nff=128, vocab=128, eps=1e-6, rope=1e4)
+
+
+def make_tiny_dense_gguf(path, seed=17, gtype=0):
+    """Random-weight dense qwen3 GGUF (no experts) for the fast-tier engine path."""
+    from deepcore.gguf import write_gguf
+    rng = np.random.default_rng(seed)
+    c = TINY_DENSE
+    meta = {
+        "general.architecture": "qwen3", "general.name": "tiny-dense",
+        "qwen3.block_count": c["L"], "qwen3.embedding_length": c["d"],
+        "qwen3.attention.head_count": c["nh"], "qwen3.attention.head_count_kv": c["nkv"],
+        "qwen3.attention.key_length": c["hd"], "qwen3.attention.layer_norm_rms_epsilon": c["eps"],
+        "qwen3.feed_forward_length": c["nff"], "qwen3.rope.freq_base": c["rope"],
+        "qwen3.context_length": 512,
+        "tokenizer.ggml.tokens": ["<|endoftext|>", "<|im_start|>", "<|im_end|>"] + [f"t{i}" for i in range(c["vocab"] - 3)],
+        "tokenizer.ggml.token_type": [3, 3, 3] + [1] * (c["vocab"] - 3),
+        "tokenizer.ggml.merges": [],
+        "tokenizer.ggml.tokens_count": c["vocab"],
+    }
+    tensors = [("token_embd.weight", [c["d"], c["vocab"]], gtype, rng.standard_normal((c["vocab"], c["d"])).astype(np.float32) * 0.1),
+               ("output_norm.weight", [c["d"]], 0, np.ones(c["d"], np.float32))]
+    for l in range(c["L"]):
+        p = f"blk.{l}."
+        tensors += [
+            (p + "attn_norm.weight", [c["d"]], 0, np.ones(c["d"], np.float32) * 0.9),
+            (p + "attn_q.weight", [c["d"], c["nh"] * c["hd"]], gtype, rng.standard_normal((c["nh"] * c["hd"], c["d"])).astype(np.float32) * 0.08),
+            (p + "attn_k.weight", [c["d"], c["nkv"] * c["hd"]], gtype, rng.standard_normal((c["nkv"] * c["hd"], c["d"])).astype(np.float32) * 0.08),
+            (p + "attn_v.weight", [c["d"], c["nkv"] * c["hd"]], gtype, rng.standard_normal((c["nkv"] * c["hd"], c["d"])).astype(np.float32) * 0.08),
+            (p + "attn_output.weight", [c["nh"] * c["hd"], c["d"]], gtype, rng.standard_normal((c["d"], c["nh"] * c["hd"])).astype(np.float32) * 0.08),
+            (p + "attn_q_norm.weight", [c["hd"]], 0, np.ones(c["hd"], np.float32)),
+            (p + "attn_k_norm.weight", [c["hd"]], 0, np.ones(c["hd"], np.float32)),
+            (p + "ffn_norm.weight", [c["d"]], 0, np.ones(c["d"], np.float32) * 0.9),
+            (p + "ffn_gate.weight", [c["d"], c["nff"]], gtype, rng.standard_normal((c["nff"], c["d"])).astype(np.float32) * 0.08),
+            (p + "ffn_up.weight", [c["d"], c["nff"]], gtype, rng.standard_normal((c["nff"], c["d"])).astype(np.float32) * 0.08),
+            (p + "ffn_down.weight", [c["nff"], c["d"]], gtype, rng.standard_normal((c["d"], c["nff"])).astype(np.float32) * 0.08),
+        ]
+    tensors.append(("output.weight", [c["d"], c["vocab"]], gtype, rng.standard_normal((c["vocab"], c["d"])).astype(np.float32) * 0.2))
+    return write_gguf(path, meta, tensors)
+
+
 def make_tiny_gguf(path, seed=7, gtype=0):
     """Random-weight qwen3moe GGUF (F32 by default) with tokenizer metadata."""
     from deepcore.gguf import write_gguf

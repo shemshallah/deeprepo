@@ -60,9 +60,11 @@ class Qwen3MoE:
         s.nkv = meta[f"{arch}.attention.head_count_kv"]
         s.hd = int(meta.get(f"{arch}.attention.key_length", s.d // s.nh))
         s.eps = float(meta.get(f"{arch}.attention.layer_norm_rms_epsilon", 1e-6))
-        s.ne = meta[f"{arch}.expert_count"]
-        s.nu = meta[f"{arch}.expert_used_count"]
-        s.nff = meta[f"{arch}.expert_feed_forward_length"]
+        s.dense = arch == "qwen3"
+        s.ne = int(meta.get(f"{arch}.expert_count", 1))
+        s.nu = int(meta.get(f"{arch}.expert_used_count", 1))
+        s.nff = int(meta.get(f"{arch}.expert_feed_forward_length",
+                              meta.get(f"{arch}.feed_forward_length", 0)))
         s.rope = float(meta.get(f"{arch}.rope.freq_base", 1e6))
         s.nvoc = int(meta.get("tokenizer.ggml.tokens_count", meta.get("tokenizer.vocab_size", 0))) or len(meta.get("tokenizer.ggml.tokens", []))
         s.chunk = chunk
@@ -85,18 +87,19 @@ class Qwen3MoE:
         s.head = None  # output head f16, loaded in bounded chunks (never an f32 copy)
         # per-expert slice geometry from merged 3-D tensors
         s.expert_bytes = {}
-        for nm in ("ffn_gate_exps", "ffn_up_exps", "ffn_down_exps"):
-            t = s.g.tensors[f"blk.0.{nm}.weight"]
-            s.expert_bytes[nm] = t.nbytes // s.ne
+        if not s.dense:
+            for nm in ("ffn_gate_exps", "ffn_up_exps", "ffn_down_exps"):
+                t = s.g.tensors[f"blk.0.{nm}.weight"]
+                s.expert_bytes[nm] = t.nbytes // s.ne
         s.st = dict(vram_reads=0, vram_bytes=0, expert_slice_reads=0, expert_bytes=0,
                     kv_writes=0, kv_read_bytes=0, l0_hits=0, l0_misses=0,
                     expert_cache_hits=0, expert_cache_misses=0, tokens=0, seconds=0.0)
 
     # ---------- weight access ----------
 
-    def _w(s, name):
+    def _w(s, name, cache=True):
         """Dequantized f32 (optionally f16-cached) weights for small/attention tensors."""
-        c = s.cache.get(name)
+        c = s.cache.get(name) if cache else None
         if c is not None:
             s.st["l0_hits"] += 1
             return c
@@ -105,7 +108,7 @@ class Qwen3MoE:
         s.st["vram_reads"] += 1
         s.st["vram_bytes"] += t.nbytes
         w = G.dequant(s.g.read_tensor(name), t.type).reshape([int(d) for d in reversed(t.dims)])
-        if s.strict:
+        if s.strict or not cache:
             return w
         w16 = w.astype(np.float16)
         nb = w16.nbytes
@@ -264,7 +267,20 @@ class Qwen3MoE:
         wo = s._w(f"blk.{l}.attn_output.weight").astype(np.float32)
         return out.reshape(C, s.nh * s.hd) @ wo.T
 
+    def _mlp(s, l, X):
+        C, d = X.shape
+        if C > 4:
+            for nm in ("ffn_gate", "ffn_up", "ffn_down"):
+                s.prefetch(f"blk.{l}.{nm}.weight")
+        wg = s._w(f"blk.{l}.ffn_gate.weight", cache=False).astype(np.float32)
+        wu = s._w(f"blk.{l}.ffn_up.weight", cache=False).astype(np.float32)
+        h = silu(X @ wg.T) * (X @ wu.T)
+        wd = s._w(f"blk.{l}.ffn_down.weight", cache=False).astype(np.float32)
+        return h @ wd.T
+
     def _moe(s, l, X):
+        if s.dense:
+            return s._mlp(l, X)
         C, d = X.shape
         router = X @ s._w(f"blk.{l}.ffn_gate_inp.weight").astype(np.float32).T  # (C, ne)
         probs = softmax(router)
