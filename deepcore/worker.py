@@ -245,7 +245,7 @@ def main(argv):
     ap.add_argument("--cache-pages", type=int, default=2048)
     ap.add_argument("--kv-cache-pages", type=int, default=256)
     ap.add_argument("--strict", action="store_true")
-    ap.add_argument("--issue", type=int, default=0)
+    ap.add_argument("--issue", default="")
     ap.add_argument("--model", default="")
     ap.add_argument("--max-tokens", type=int, default=48)
     a = ap.parse_args(argv)
@@ -263,7 +263,7 @@ def main(argv):
         env.ram.flush(max_pages=128)
         return 0
     if a.op == "chat":
-        res = op_chat(env, a.issue, model=a.model or None, max_tokens=a.max_tokens)
+        res = op_chat(env, int(a.issue or 0), model=a.model or None, max_tokens=a.max_tokens)
     else:
         res = OPS[a.op](env, **({"job_id": a.job, "shift_minutes": a.shift_minutes,
                                   "shift_tokens": a.shift_tokens, "max_shifts": a.max_shifts}
