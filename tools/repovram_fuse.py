@@ -18,14 +18,11 @@ from fuse import FUSE, FuseOSError, Operations
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from deepcore import PAGE  # noqa: E402
 from deepcore.runtime import Env  # noqa: E402
-from deepcore.store import FineReader  # noqa: E402
 
 
 class RepoGGUF(Operations):
     def __init__(self, env, base, size, name="model.gguf"):
         self.env, self.base, self.size, self.name = env, base, size, name
-        self.fine = FineReader(env.vram, block=1 << 20, cap=1 << 30)
-        self.last_end = None
         self.t0 = time.time()
         self.reads = self.bytes = 0
 
@@ -57,12 +54,7 @@ class RepoGGUF(Operations):
             return b""
         n = min(size, self.size - offset)
         try:
-            sequential = self.last_end == offset
-            self.last_end = offset + n
-            if sequential or n >= (1 << 20):
-                data = self.env.vram.read(self.base + offset, n)
-            else:
-                data = self.fine.read(self.base + offset, n)
+            data = self.env.vram.read(self.base + offset, n)
         except Exception as e:
             print(f"fuse: read failed offset={offset} size={size}: {e!r}", flush=True)
             raise
