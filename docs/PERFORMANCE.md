@@ -48,7 +48,8 @@ for daily use.
 | Q4_K_M (current) | 17.28 GiB | **does not fit RAM or disk**; proves the sparse repo-VRAM claim at 0.05 tok/s |
 | prefix KV reuse | — | reuses the previous turn's KV instead of re-prefilling the whole chat history |
 | 1 MiB pages | same model | 4 MiB pages over-fetch ~4x per expert slice; a 1 MiB page format needs a re-import but cuts decode bytes ~2–4x |
-| hot-expert pinning | — | route-frequency pinning keeps the hottest experts in RAM; 1.5–2x decode |
+| hot-expert pinning | — | 1 GiB LFU cache, second-use admission; keeps reused experts, cuts repeat paging |
+| 1 MiB decode reads | — | fine reader bypasses 4 MiB page overfetch for 0.88–1.29 MiB expert slices; no re-import |
 | speculative decoding | +0.6B draft | propose K tokens with a small model, verify in one 30B forward; 2–3x, complex |
 
 `03-load-model` accepts any single-file GGUF URL; switching to Q3_K_M is a re-import plus a
