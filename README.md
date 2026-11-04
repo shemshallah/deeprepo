@@ -33,6 +33,19 @@ packet, and frees the lease. The next slot is hydrated **before** it is granted 
 and continues from the KV already in reporam. The coordinator tails the journal and streams
 the reply to the issue.
 
+## Fast usable tier (4B via llama.cpp)
+
+The ring above is the **30B paging proof**. For a chat that feels normal, the fast tier uses
+the same model the original ram16/B2 experiment used: **Qwen3-4B-Instruct-2507 Q4_K_M
+(2.50 GB, 596 pages)**. Its weights live in repovram bins 9–10 at page 4590.
+
+`08-fast-serve` materializes that GGUF from repovram to `/tmp` (22–25 s), starts one
+`llama-server`, and reuses it for every issue turn. Measured on an `ubuntu-latest` runner:
+**~11.5 decode tok/s**, a 116-token reply in **40 s** including the cold start; warm turns
+answer in **6–26 s**. `07-batch` can also dispatch one-shot 4B turns to the CPU slots.
+Set the repo variable `CHAT_MODEL=qwen3-4b-instruct-2507-q4_k_m`; the keeper routes to
+`08-fast-serve`, while `05-serve` stays reserved for the 30B ring.
+
 ## Where the memory claim is proven
 
 `tests/` runs offline, with a tiny random Qwen3-MoE GGUF and file-backed tiers that use the

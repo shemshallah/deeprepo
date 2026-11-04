@@ -45,10 +45,18 @@ with a clear error.
 | Qwen3-30B-A3B Q2_K | ~12 GiB | yes | fastest fit, noticeably degraded |
 | Qwen3-30B-A3B Q8_0 | ~32.5 GiB | no | exceeds 8159 pages |
 | Qwen3-235B-A22B | >120 GiB | no | out of scope |
+| **Qwen3-4B-Instruct-2507 (fast)** | **2.50 GiB** | **yes** | **fast tier: materialize + llama.cpp (~11.5 tok/s)** |
+| Qwen3-1.7B (fast, optional) | 1.03 GiB | yes | smaller/faster, lower quality |
 
 Swap the model with `03-load-model`'s `url` + `key` inputs (any single-file GGUF URL with
 Content-Length and Range; split GGUFs are not supported). The engine reads the architecture
 from the GGUF header; `qwen3` dense is also accepted.
+
+## Fast tier
+
+The 4B fast tier does not use the numpy engine. `08-fast-serve` materializes the 4B GGUF
+from repovram and runs it with llama.cpp, matching the original ram16 approach. Measured:
+22–25 s materialize, ~11.5 tok/s decode, 40 s for a 116-token reply cold, 6–26 s warm.
 
 ## Performance expectations (2-core hosted runner)
 
