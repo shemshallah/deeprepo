@@ -144,6 +144,19 @@ def cmd_keeper(env, loop=False, interval=600):
         _t.sleep(1800 if out.get("quota_paused") else max(60, int(interval)))
 
 
+def _repo_variable(repo, token, name):
+    import json as _json, urllib.request
+    url = f"https://api.github.com/repos/{repo}/actions/variables/{name}"
+    rq = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}",
+                                              "Accept": "application/vnd.github+json",
+                                              "User-Agent": "deeprepo-keeper"})
+    try:
+        with urllib.request.urlopen(rq, timeout=30) as r:
+            return _json.load(r).get("value")
+    except Exception:
+        return None
+
+
 def _workflow_running(repo, token, workflow):
     import json as _json, urllib.request
     url = f"https://api.github.com/repos/{repo}/actions/workflows/{workflow}/runs?status=in_progress&per_page=1"
@@ -176,7 +189,7 @@ def _keeper_tick(env):
     mi = env.model_info() or {}
     gate = regs.get("gate/single") or {}
     repo = os.environ.get("GITHUB_REPOSITORY", "") or env.main_repo
-    chat = os.environ.get("CHAT_MODEL", "")
+    chat = os.environ.get("CHAT_MODEL", "") or _repo_variable(repo, env.token, "CHAT_MODEL") or ""
     fast = any(x in chat.lower() for x in ("4b", "1.7b"))
     if fast:
         if _workflow_running(repo, env.token, "08-fast-serve.yml"):

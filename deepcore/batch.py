@@ -20,6 +20,16 @@ from .tok import clean_reply
 MARK = "<!--ram16-->"
 CUR = " ▌"
 BUSY = "deeprepo-busy"
+FAST_SYSTEM = ("You are Qwen, served by deeprepo. Model weights live as sparse 4 MiB pages "
+               "in public GitHub release bins (repovram); the fast tier materializes the "
+               "Qwen3-4B Q4 GGUF locally and runs llama.cpp, while the 30B paging proof uses "
+               "the custom engine. Answer naturally and concisely.")
+
+
+def _with_system(messages):
+    if any(m.get("role") == "system" for m in messages):
+        return messages
+    return [{"role": "system", "content": FAST_SYSTEM}] + list(messages)
 
 
 class MemKV:
@@ -220,7 +230,7 @@ def _answer_llama(env, repo, token, issue, model_key, max_tokens, log):
     text, last, first = "", 0.0, None
     made = 0
     try:
-        for d in _chat_stream(port, req["messages"], max_tokens):
+        for d in _chat_stream(port, _with_system(req["messages"]), max_tokens):
             text += d
             made += 1
             if first is None:
@@ -328,7 +338,7 @@ def serve(env, minutes=300, max_tokens=128, model_key=None, interval=8, log=prin
                 handle = _begin(repo, token, issue, req["handle"])
                 text, last, first = "", 0.0, None
                 made = 0
-                for d in _chat_stream(port, req["messages"], max_tokens):
+                for d in _chat_stream(port, _with_system(req["messages"]), max_tokens):
                     text += d
                     made += 1
                     if first is None:
