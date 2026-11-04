@@ -114,6 +114,12 @@ This is out-of-core inference over a CDN, not local inference. Rough expectation
 expert-cache luck, ~32 tokens per 20-minute shift. Quality is the real Qwen3-30B-A3B's;
 throughput is the price of running it on memory that doesn't exist locally.
 
+**Measured 30B Q4 llama.cpp benchmark (`09-llama-30b`)** — FUSE-exposed repovram file,
+mmap'd by llama.cpp: **0.225 tok/s decode (4.45 s/token)**, **0.78 tok/s prefill**,
+136 s model load, 33.7 GiB read through FUSE (256-page cache). That is **~5× faster
+decode than the custom numpy engine (0.041–0.047 tok/s)**, but still not interactive.
+The 4B fast tier remains the usable path at **~11.5 tok/s**.
+
 Default daily budget (shared by all writers, persisted in registers): 96 GiB down,
 12 GiB up, 288k API calls, 24k tokens. Caps fail closed.
 

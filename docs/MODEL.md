@@ -70,6 +70,8 @@ measured statistics (`STATS {...}`) from the runner.
 | decode token (warm experts) | 3–8 s |
 | decode token (cold experts) | 6–12 s |
 | 32-token shift | ~20 min incl. prefill amortization |
+| **30B Q4, llama.cpp over FUSE** | **0.225 tok/s decode; 4.45 s/token; 0.78 tok/s prefill** |
+| 30B Q4, custom numpy engine | 0.041–0.047 tok/s decode |
 
 The 24/7 loop is deliberately shift-based: each runner job stays well under an hour, state
 is durable in reporam, and the ring rotates. Quality is the real model's quality; latency

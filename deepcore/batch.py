@@ -335,7 +335,7 @@ def serve(env, minutes=300, max_tokens=128, model_key=None, interval=8, log=prin
                 req = fetch_issue(repo, token, issue)
                 if not req:
                     continue
-                handle = _begin(repo, token, issue, req["handle"])
+                handle = _begin(repo, token, issue, None)
                 text, last, first = "", 0.0, None
                 made = 0
                 for d in _chat_stream(port, _with_system(req["messages"]), max_tokens):
