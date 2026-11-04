@@ -56,6 +56,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p /tmp/mnt
+          DEEPREPO_DISK_CACHE=/tmp/deepcache DEEPREPO_DISK_CACHE_GB=6 \
           PYTHONPATH="$PWD" python tools/repovram_fuse.py /tmp/mnt \
             --model "$MODEL" --cache-pages "${{ inputs.cache_pages }}" > /tmp/fuse.log 2>&1 &
           FUSE_PID=$!
@@ -79,7 +80,7 @@ jobs:
           set -euo pipefail
           free -m || true
           /tmp/llama-b12098/llama-server -m /tmp/mnt/model.gguf \
-            --host 127.0.0.1 --port 18081 -c 512 -t 4 -ngl 0 --jinja --no-warmup \
+            --host 127.0.0.1 --port 18081 -c 512 -t 4 -ngl 0 --jinja --no-warmup --fit off \
             2>&1 | tee /tmp/llama-server.log &
           echo $! > /tmp/llama.pid
           for i in $(seq 1 600); do

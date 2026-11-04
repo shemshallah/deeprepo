@@ -90,7 +90,7 @@ def main():
     print(f"fuse: model={mi.get('key')} base_page={mi.get('base')} size={size} "
           f"cache_pages={a.cache_pages}", flush=True)
     FUSE(RepoGGUF(env, base, size, a.name), a.mountpoint, foreground=True,
-         ro=True, max_read=1 << 20, nothreads=False)
+         ro=True, max_read=4 << 20, nothreads=False)
 
 
 if __name__ == "__main__":
