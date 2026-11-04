@@ -272,10 +272,10 @@ class Qwen3MoE:
         if C > 4:
             for nm in ("ffn_gate", "ffn_up", "ffn_down"):
                 s.prefetch(f"blk.{l}.{nm}.weight")
-        wg = s._w(f"blk.{l}.ffn_gate.weight", cache=False).astype(np.float32)
-        wu = s._w(f"blk.{l}.ffn_up.weight", cache=False).astype(np.float32)
+        wg = s._w(f"blk.{l}.ffn_gate.weight").astype(np.float32)
+        wu = s._w(f"blk.{l}.ffn_up.weight").astype(np.float32)
         h = silu(X @ wg.T) * (X @ wu.T)
-        wd = s._w(f"blk.{l}.ffn_down.weight", cache=False).astype(np.float32)
+        wd = s._w(f"blk.{l}.ffn_down.weight").astype(np.float32)
         return h @ wd.T
 
     def _moe(s, l, X):

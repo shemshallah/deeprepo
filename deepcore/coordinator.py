@@ -125,6 +125,8 @@ class Coordinator:
         if env.budget.exhausted():
             raise BudgetExceeded("daily budget exhausted")
         model_key = os.environ.get("CHAT_MODEL") or None
+        mi = env.model_info(model_key) or {}
+        f16 = 8000 if 0 < int(mi.get("size", 1)) < (6 << 30) else 1856
         tok = env.tokenizer(model_key)
         if max_tokens is None:
             max_tokens = int(os.environ.get("MAX_REPLY_TOKENS", "48"))
@@ -150,7 +152,7 @@ class Coordinator:
                 "id": job_id, "issue": req.id, "prompt_ids": ids,
                 "gen": {"max_tokens": left, "temp": 0.7, "top_k": 20, "top_p": 0.8,
                         "penalty": 1.05, "seed": int(time.time()) % 2**31,
-                        "f16_cache_mb": 1856, "chunk": 192},
+                        "f16_cache_mb": f16, "chunk": 192},
                 "model": model_key,
                 "prefix_len": prefix_len,
                 "t": int(time.time())})
