@@ -61,7 +61,7 @@ public:
             CURL *c = curl_easy_init();
             if (!c) throw std::runtime_error("curl_easy_init failed");
             std::vector<uint8_t> out;
-            std::string range = "bytes=" + std::to_string(off) + "-" +
+            std::string range = std::to_string(off) + "-" +
                                 std::to_string(off + n - 1);
             struct curl_slist *headers = nullptr;
             if (!token_.empty())
