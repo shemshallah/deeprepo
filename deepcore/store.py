@@ -351,6 +351,12 @@ class Journal(RetryStore):
         try:
             return super().put(n, data)
         except urllib.error.HTTPError as e:
+            if e.code == 422:  # same-name asset already exists: replace it
+                try:
+                    s.delete(n)
+                except Exception:
+                    pass
+                return super().put(n, data)
             if e.code != 404:
                 raise
         s._create()
