@@ -54,6 +54,7 @@ jobs:
       - name: Preflight (model + gate + budget)
         run: |
           [ -n "$GH_TOKEN" ] || { echo "::error::Missing DEEPREPO_PAT"; exit 1; }
+          case "$CHAT_MODEL" in *4b*|*1.7b*) echo "::error::CHAT_MODEL=$CHAT_MODEL is the fast tier; use 08-fast-serve"; exit 1;; esac
           python -m deepcore status | tee status.txt
           grep -q '"ready": true' status.txt || { echo "::error::no model loaded"; exit 1; }
           grep -q '"ok": true' status.txt || { echo "::error::single-runner gate not passed (run 04-boot-single)"; exit 1; }

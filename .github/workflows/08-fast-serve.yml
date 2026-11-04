@@ -1,0 +1,96 @@
+name: 08 fast serve
+# Usable tier: Qwen3-4B Q4_K_M through llama.cpp (the ram16 pattern).
+# Weights still live in repovram; this job materializes them to /tmp once, then serves
+# issue chat from a single long-lived llama-server. The 30B paging proof stays on 05.
+on:
+  workflow_dispatch:
+    inputs:
+      minutes:
+        description: wall-clock minutes for this serve window
+        type: string
+        default: "300"
+      loop:
+        description: re-dispatch a new fast window when this one ends cleanly
+        type: boolean
+        default: true
+      max_tokens:
+        description: reply cap per turn
+        type: string
+        default: "128"
+
+permissions:
+  actions: write
+  contents: read
+  issues: write
+
+concurrency:
+  group: fast-serve
+  cancel-in-progress: false
+
+env:
+  GH_TOKEN: ${{ secrets.DEEPREPO_PAT }}
+  DEEPREPO_RAM: ${{ vars.REPORAM_REPO || format('{0}/reporam', github.repository_owner) }}
+  DEEPREPO_VRAM: ${{ vars.REPOVRAM_REPO || format('{0}/repovram', github.repository_owner) }}
+  DEEPREPO_MAIN: ${{ github.repository }}
+  DEEPREPO_RAM_BACKEND: ${{ vars.RAM_BACKEND || 'github' }}
+  DEEPREPO_VRAM_BACKEND: ${{ vars.VRAM_BACKEND || 'github' }}
+  DEEPREPO_MIDDLE_URL: ${{ vars.MIDDLE_URL }}
+  DEEPREPO_MIDDLE_TOKEN: ${{ secrets.MIDDLE_TOKEN }}
+  CHAT_MODEL: ${{ vars.CHAT_MODEL || 'qwen3-4b-instruct-2507-q4_k_m' }}
+
+jobs:
+  fast:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements-core.txt
+
+      - name: llama.cpp
+        run: |
+          set -euo pipefail
+          curl -fsSL https://github.com/ggml-org/llama.cpp/releases/download/b12098/llama-b12098-bin-ubuntu-x64.tar.gz -o /tmp/llama.tar.gz
+          tar xzf /tmp/llama.tar.gz -C /tmp
+          test -x /tmp/llama-b12098/llama-server
+          df -h /tmp | tail -1
+
+      - name: Preflight (fast model loaded)
+        run: |
+          python - <<'EOF'
+          import os
+          from deepcore.runtime import Env
+          e = Env(writer=False)
+          key = os.environ.get("CHAT_MODEL", "")
+          mi = e.model_info(key) or {}
+          assert mi.get("ready"), f"fast model {key!r} is not ready in repovram"
+          print(f"fast model {key} base={mi.get('base')} pages={mi.get('weight_pages')} size={mi.get('size')}")
+          EOF
+
+      - name: Serve
+        env:
+          LLAMA_SERVER: /tmp/llama-b12098/llama-server
+        run: |
+          set -o pipefail
+          python -m deepcore fast-serve --minutes "${{ inputs.minutes }}" \
+            --max-tokens "${{ inputs.max_tokens }}" --model "$CHAT_MODEL" | tee fast.log
+
+      - name: Hand off a fresh window
+        if: ${{ inputs.loop && success() }}
+        run: |
+          gh workflow run 08-fast-serve.yml -f minutes="${{ inputs.minutes }}" \
+            -f loop=true -f max_tokens="${{ inputs.max_tokens }}"
+          echo "next fast window dispatched"
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "## Fast serve"
+            echo '```'
+            tail -60 fast.log 2>/dev/null || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

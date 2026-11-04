@@ -21,6 +21,7 @@ env:
   DEEPREPO_VRAM_BACKEND: ${{ vars.VRAM_BACKEND || 'github' }}
   DEEPREPO_MIDDLE_URL: ${{ vars.MIDDLE_URL }}
   DEEPREPO_MIDDLE_TOKEN: ${{ secrets.MIDDLE_TOKEN }}
+  CHAT_MODEL: ${{ vars.CHAT_MODEL }}
 
 jobs:
   keeper:
@@ -39,11 +40,15 @@ jobs:
         env:
           PAT: ${{ secrets.DEEPREPO_PAT }}
         run: |
-          n=$(curl -s -H "Authorization: Bearer $PAT" \
-            "https://api.github.com/repos/$DEEPREPO_MAIN/actions/workflows/05-serve.yml/runs?status=in_progress&per_page=1" \
-            | python -c "import json,sys; print(len(json.load(sys.stdin).get('workflow_runs', [])))")
+          n=0
+          for wf in 05-serve.yml 08-fast-serve.yml; do
+            c=$(curl -s -H "Authorization: Bearer $PAT" \
+              "https://api.github.com/repos/$DEEPREPO_MAIN/actions/workflows/$wf/runs?status=in_progress&per_page=1" \
+              | python -c "import json,sys; print(len(json.load(sys.stdin).get('workflow_runs', [])))")
+            n=$((n + c))
+          done
           echo "in_progress=$n" >> "$GITHUB_OUTPUT"
-          [ "$n" = "0" ] || echo "serve is running; keeper will only compact if idle"
+          [ "$n" = "0" ] || echo "a serve window is running; keeper will only compact if idle"
 
       - name: Keeper pass
         if: ${{ steps.busy.outputs.in_progress == '0' }}

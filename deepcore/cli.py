@@ -1,6 +1,6 @@
 """python -m deepcore <cmd> — operator entry points.
 
-status | bootstrap | load-model | sweep | gate | serve | once | keeper | worker | local
+status | bootstrap | load-model | sweep | gate | serve | once | fast-serve | keeper | worker | local
 """
 import json
 import sys
@@ -144,6 +144,19 @@ def cmd_keeper(env, loop=False, interval=600):
         _t.sleep(1800 if out.get("quota_paused") else max(60, int(interval)))
 
 
+def _workflow_running(repo, token, workflow):
+    import json as _json, urllib.request
+    url = f"https://api.github.com/repos/{repo}/actions/workflows/{workflow}/runs?status=in_progress&per_page=1"
+    rq = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}",
+                                              "Accept": "application/vnd.github+json",
+                                              "User-Agent": "deeprepo-keeper"})
+    try:
+        with urllib.request.urlopen(rq, timeout=30) as r:
+            return bool(_json.load(r).get("workflow_runs"))
+    except Exception:
+        return False
+
+
 def _keeper_tick(env):
     from . import ring
     from .status import StatusBoard
@@ -162,6 +175,25 @@ def _keeper_tick(env):
         return out
     mi = env.model_info() or {}
     gate = regs.get("gate/single") or {}
+    repo = os.environ.get("GITHUB_REPOSITORY", "") or env.main_repo
+    chat = os.environ.get("CHAT_MODEL", "")
+    fast = any(x in chat.lower() for x in ("4b", "1.7b"))
+    if fast:
+        if _workflow_running(repo, env.token, "08-fast-serve.yml"):
+            out["action"] = "busy: fast serve window"
+        elif os.environ.get("KEEPER_DISPATCH", "1") == "1" and repo:
+            try:
+                ring.dispatch_workflow(repo, "08-fast-serve.yml", env.token,
+                                       {"minutes": "300", "loop": "true", "max_tokens": "128"})
+                out["action"] = "dispatched 08-fast-serve"
+            except Exception as e:
+                out["action"] = f"dispatch failed: {e!r}"
+        else:
+            out["action"] = "idle: fast model (dispatch disabled)"
+        if board.enabled:
+            board.update(env, phase=str(out.get("action", "idle")))
+        print(json.dumps(out, indent=2))
+        return out
     if not mi.get("ready"):
         out["action"] = "idle: no model loaded (run 03-load-model)"
     elif not gate.get("ok"):
@@ -178,7 +210,6 @@ def _keeper_tick(env):
                     out["compact_gen"] = compact_trimmed(env.ram)
                 except Exception as e:
                     out["compact_error"] = repr(e)
-            repo = os.environ.get("GITHUB_REPOSITORY", "")
             if repo and os.environ.get("KEEPER_DISPATCH", "1") == "1":
                 try:
                     ring.dispatch_workflow(repo, "05-serve.yml", env.token, {"minutes": "300", "loop": "true"})
@@ -257,6 +288,14 @@ def main(argv=None):
                              max_tokens=int(arg("--max-tokens", "48")))
         print(json.dumps(out))
         return 0
+    if cmd == "fast-serve":
+        from . import batch
+        from .runtime import Env
+        env = Env(writer=False)
+        env.main_repo = env.main_repo or __import__("os").environ.get("GITHUB_REPOSITORY", "")
+        return batch.serve(env, minutes=int(arg("--minutes", "300")),
+                           max_tokens=int(arg("--max-tokens", "128")),
+                           model_key=arg("--model") or None)
     if cmd == "sweep":
         from .runtime import Env
         return cmd_sweep(Env(writer=True), arg("--op", "selftest"))

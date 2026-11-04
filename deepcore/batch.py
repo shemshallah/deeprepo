@@ -168,7 +168,7 @@ def _llama_server(path, model_path, port):
         try:
             with urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=2) as r:
                 if r.status == 200:
-                    logf.close()
+                    proc._deeprepo_log = logf
                     return proc
         except Exception:
             pass
@@ -288,6 +288,75 @@ def _answer(env, repo, token, issue, model_key, max_tokens, log):
     _update(repo, token, handle, clean_reply(text), done=True)
     log(f"batch: issue {issue} done in {time.time()-t0:.0f}s, {len(text)} chars")
     return text
+
+
+def serve(env, minutes=300, max_tokens=128, model_key=None, interval=8, log=print):
+    """Fast 24/7 loop: one llama.cpp server, answers pending deeprepo-chat issues."""
+    repo, token = env.main_repo, env.token
+    key = model_key or os.environ.get("CHAT_MODEL") or None
+    path = os.environ.get("LLAMA_SERVER") or shutil.which("llama-server")
+    if not path or not os.path.isfile(path):
+        raise FileNotFoundError("llama-server not installed (set LLAMA_SERVER)")
+    if not key:
+        raise IOError("fast-serve needs CHAT_MODEL or --model")
+    model_path = f"/tmp/deeprepo-{key}.gguf"
+    t0 = time.time()
+    env.materialize_model(key, model_path)
+    log(f"fast: materialized {model_path} in {time.time()-t0:.0f}s")
+    port = int(os.environ.get("LLAMA_PORT", "18080"))
+    proc = _llama_server(path, model_path, port)
+    deadline = time.time() + max(1, minutes) * 60
+    log(f"fast: serving {key} for {minutes}m on port {port}")
+    try:
+        while time.time() < deadline:
+            reqs = pending(repo, token, "deeprepo-chat", limit=1)
+            if not reqs:
+                time.sleep(interval)
+                continue
+            issue = reqs[0]["id"]
+            try:
+                _api(repo, token, f"/issues/{issue}/labels", "POST", {"labels": [BUSY]})
+            except Exception as e:
+                log(f"fast: could not mark {issue} busy: {e!r}")
+                time.sleep(interval)
+                continue
+            handle = None
+            try:
+                req = fetch_issue(repo, token, issue)
+                if not req:
+                    continue
+                handle = _begin(repo, token, issue, req["handle"])
+                text, last, first = "", 0.0, None
+                made = 0
+                for d in _chat_stream(port, req["messages"], max_tokens):
+                    text += d
+                    made += 1
+                    if first is None:
+                        first = time.time()
+                        log(f"fast: issue {issue} first token after {first-t0:.1f}s")
+                    if time.time() - last >= 3:
+                        _update(repo, token, handle, clean_reply(text))
+                        last = time.time()
+                _update(repo, token, handle, clean_reply(text) or "(no output)", done=True)
+                dt = (time.time() - first) if first else 0
+                log(f"fast: issue {issue} done, {made} chunks, {made/max(dt,1e-6):.2f} chunks/s")
+            except Exception as e:
+                log(f"fast: issue {issue} failed: {e!r}")
+                if handle:
+                    try: _update(repo, token, handle, f"llama error: {e}", done=True)
+                    except Exception: pass
+            finally:
+                try: _api(repo, token, f"/issues/{issue}/labels/{BUSY}", "DELETE")
+                except Exception: pass
+    finally:
+        try:
+            proc.terminate(); proc.wait(timeout=10)
+        except Exception:
+            try: proc.kill()
+            except Exception: pass
+        try: getattr(proc, "_deeprepo_log", None).close()
+        except Exception: pass
+        log("fast: server stopped")
 
 
 def dispatch(env, slots, limit=5, model_key=None, max_tokens=48, log=print):
