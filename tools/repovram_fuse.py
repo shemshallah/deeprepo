@@ -81,7 +81,7 @@ def main():
     ap.add_argument("--name", default="model.gguf")
     a = ap.parse_args()
     os.makedirs(a.mountpoint, exist_ok=True)
-    env = Env(writer=False, cache_pages=a.cache_pages)
+    env = Env(writer=False, cache_pages=a.cache_pages, kv_cache_pages=16)
     mi = env.model_info(a.model) if a.model else env.model_info()
     if not mi or not mi.get("ready"):
         raise SystemExit(f"no ready model ({a.model or 'active'})")

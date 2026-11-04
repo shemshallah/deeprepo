@@ -73,11 +73,14 @@ jobs:
           exit 1
 
       - name: Benchmark llama.cpp over FUSE
+        env:
+          LLAMA_LOG: "1"
         run: |
           set -euo pipefail
+          free -m || true
           /tmp/llama-b12098/llama-server -m /tmp/mnt/model.gguf \
-            --host 127.0.0.1 --port 18081 -c 2048 -t 4 -ngl 0 --jinja \
-            > /tmp/llama-server.log 2>&1 &
+            --host 127.0.0.1 --port 18081 -c 512 -t 4 -ngl 0 --jinja --no-warmup \
+            2>&1 | tee /tmp/llama-server.log &
           echo $! > /tmp/llama.pid
           for i in $(seq 1 600); do
             if curl -sf http://127.0.0.1:18081/health >/dev/null 2>&1; then echo "server healthy after ${i}s"; break; fi
