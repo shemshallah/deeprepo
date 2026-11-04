@@ -270,11 +270,33 @@ class FineReader:
 
     def _read_block(s, start):
         page = start // s.page
-        slot = page // s.pps
         in_page = start % s.page
-        off = s.hdr + (page % s.pps) * s.page + in_page
         n = min(s.block, s.page - in_page)
-        return s.ram.slots[slot].read(off, n)
+        # 1) the big Ram16 page cache (8 GiB, warm from prefill)
+        with s.ram.lk:
+            b = s.ram.dirty.get(page)
+            if b is None:
+                b = s.ram.cache.get(page)
+            if b is not None:
+                return b[in_page:in_page + n]
+        # 2) 1 MiB block cache
+        with s.lk:
+            b = s.cache.get(start)
+            if b is not None:
+                s.cache.move_to_end(start)
+                return b
+        # 3) slot read (hits the 8 GiB SSD page cache, then CDN)
+        slot = page // s.pps
+        off = s.hdr + (page % s.pps) * s.page + in_page
+        b = s.ram.slots[slot].read(off, n)
+        with s.lk:
+            if start not in s.cache:
+                s.cache[start] = b
+                s.bytes += len(b)
+                while s.bytes > s.cap and s.cache:
+                    k, v = s.cache.popitem(last=False)
+                    s.bytes -= len(v)
+        return b
 
     def read(s, addr, n):
         out = bytearray()
@@ -287,13 +309,6 @@ class FineReader:
                     s.cache.move_to_end(start)
             if b is None:
                 b = s._read_block(start)
-                with s.lk:
-                    if start not in s.cache:
-                        s.cache[start] = b
-                        s.bytes += len(b)
-                        while s.bytes > s.cap and s.cache:
-                            k, v = s.cache.popitem(last=False)
-                            s.bytes -= len(v)
             a = pos - start
             take = min(end - pos, len(b) - a)
             out += b[a:a + take]
