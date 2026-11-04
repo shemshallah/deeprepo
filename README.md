@@ -91,6 +91,7 @@ matrix, token scopes, and the weight/release lifecycle (never rewrite weights on
 - [Runbook](docs/RUNBOOK.md) — setup, secrets, operations, troubleshooting.
 - [ToS safety](docs/TOS_SAFETY.md) — budgets, concurrency, retention, what we avoid.
 - [Middleman](docs/MIDDLEMAN.md) — optional hosted control plane + mutable hot tier.
+- [Batch ring](docs/BATCH.md) — five concurrent turns, local KV.
 - [Performance](docs/PERFORMANCE.md) — measured prefill/decode, tok/s, and why it is slow.
 
 ## Honest performance
