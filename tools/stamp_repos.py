@@ -93,8 +93,18 @@ jobs:
 
       - run: pip install -r core/requirements-core.txt
 
+      - name: llama.cpp (chat)
+        if: inputs.op == 'chat'
+        run: |
+          set -euo pipefail
+          curl -fsSL https://github.com/ggml-org/llama.cpp/releases/download/b12098/llama-b12098-bin-ubuntu-x64.tar.gz -o /tmp/llama.tar.gz
+          tar xzf /tmp/llama.tar.gz -C /tmp
+          test -x /tmp/llama-b12098/llama-server
+
       - name: Execute
         working-directory: core
+        env:
+          LLAMA_SERVER: /tmp/llama-b12098/llama-server
         run: |
           set -euo pipefail
           python -m deepcore.worker "${{ inputs.op }}" --job "${{ inputs.job }}" --shift-minutes "${{ inputs.minutes }}" --shift-tokens 32 --max-shifts 4 --cache-pages 2048 --kv-cache-pages 192 --issue "${{ inputs.issue }}" --model "${{ inputs.model }}" --max-tokens "${{ inputs.max_tokens }}"

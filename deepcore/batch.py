@@ -6,12 +6,16 @@ finished reply. Five slots = five concurrent conversations. Weights still page f
 """
 import json
 import os
+import shutil
+import subprocess
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 
 import numpy as np
+
+from .tok import clean_reply
 
 MARK = "<!--ram16-->"
 CUR = " ▌"
@@ -134,12 +138,112 @@ def _update(repo, token, handle, text, done=False):
 def answer(env, issue, model_key=None, max_tokens=48, log=print):
     repo, token = env.main_repo, env.token
     try:
+        if os.environ.get("DEEPREPO_FAST", "llama").lower() not in ("0", "numpy", "off"):
+            try:
+                return _answer_llama(env, repo, token, issue, model_key, max_tokens, log)
+            except FileNotFoundError:
+                log("batch: llama-server unavailable, falling back to numpy engine")
         return _answer(env, repo, token, issue, model_key, max_tokens, log)
     finally:
         try:
             _api(repo, token, f"/issues/{issue}/labels/{BUSY}", "DELETE")
         except Exception:
             pass
+
+
+def _llama_server(path, model_path, port):
+    """Start llama.cpp server with the materialized GGUF (ram16 pattern, CPU-only)."""
+    env = os.environ.copy()
+    root = os.path.dirname(path)
+    env["LD_LIBRARY_PATH"] = root + (":" + env["LD_LIBRARY_PATH"] if env.get("LD_LIBRARY_PATH") else "")
+    logf = open(f"/tmp/llama-server-{port}.log", "wb")
+    cmd = [path, "-m", model_path, "--host", "127.0.0.1", "--port", str(port),
+           "-c", "8192", "-t", str(os.cpu_count() or 4), "-ngl", "0", "--jinja"]
+    proc = subprocess.Popen(cmd, stdout=logf, stderr=subprocess.STDOUT, env=env)
+    for _ in range(180):
+        if proc.poll() is not None:
+            logf.close()
+            tail = open(f"/tmp/llama-server-{port}.log", "rb").read()[-1500:].decode("utf-8", "replace")
+            raise RuntimeError(f"llama-server exited: {tail}")
+        try:
+            with urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=2) as r:
+                if r.status == 200:
+                    logf.close()
+                    return proc
+        except Exception:
+            pass
+        time.sleep(1)
+    proc.kill(); logf.close()
+    raise RuntimeError("llama-server did not become healthy")
+
+
+def _chat_stream(port, messages, max_tokens):
+    payload = {"model": "local", "messages": messages, "max_tokens": max_tokens,
+               "temperature": 0.7, "top_p": 0.8, "stream": True}
+    rq = urllib.request.Request(f"http://127.0.0.1:{port}/v1/chat/completions",
+                                data=json.dumps(payload).encode(),
+                                headers={"Content-Type": "application/json"}, method="POST")
+    with urllib.request.urlopen(rq, timeout=900) as r:
+        for raw in r:
+            line = raw.decode("utf-8", "replace").strip()
+            if not line.startswith("data:"):
+                continue
+            data = line[5:].strip()
+            if data == "[DONE]":
+                break
+            try:
+                obj = json.loads(data)
+            except Exception:
+                continue
+            delta = (obj.get("choices") or [{}])[0].get("delta") or {}
+            text = delta.get("content")
+            if text:
+                yield text
+
+
+def _answer_llama(env, repo, token, issue, model_key, max_tokens, log):
+    """Fast tier exactly like ram16: materialize GGUF, then llama.cpp inference."""
+    path = os.environ.get("LLAMA_SERVER") or shutil.which("llama-server")
+    if not path or not os.path.isfile(path):
+        raise FileNotFoundError("llama-server not installed (set LLAMA_SERVER)")
+    req = fetch_issue(repo, token, int(issue))
+    if not req:
+        log(f"batch: issue {issue} has no pending user turn")
+        return ""
+    model_path = f"/tmp/deeprepo-{str(model_key or 'default')}.gguf"
+    t0 = time.time()
+    env.materialize_model(model_key, model_path)
+    log(f"batch: materialized {model_path} in {time.time()-t0:.0f}s")
+    port = int(os.environ.get("LLAMA_PORT", "18080"))
+    proc = _llama_server(path, model_path, port)
+    handle = _begin(repo, token, issue, req["handle"])
+    text, last, first = "", 0.0, None
+    made = 0
+    try:
+        for d in _chat_stream(port, req["messages"], max_tokens):
+            text += d
+            made += 1
+            if first is None:
+                first = time.time()
+                log(f"batch: llama first token after {first-t0:.1f}s")
+            if time.time() - last >= 3:
+                _update(repo, token, handle, clean_reply(text))
+                last = time.time()
+        _update(repo, token, handle, clean_reply(text) or "(no output)", done=True)
+    except Exception as e:
+        _update(repo, token, handle, f"llama error: {e}", done=True)
+        raise
+    finally:
+        try:
+            proc.terminate()
+            proc.wait(timeout=10)
+        except Exception:
+            try: proc.kill()
+            except Exception: pass
+    dt = (time.time() - first) if first else 0
+    log(f"batch: llama issue {issue} done in {time.time()-t0:.0f}s, {len(text)} chars, "
+        f"{made} chunks, {made/max(dt,1e-6):.2f} chunks/s")
+    return text
 
 
 def _answer(env, repo, token, issue, model_key, max_tokens, log):

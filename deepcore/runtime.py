@@ -98,6 +98,18 @@ class Env:
         return Qwen3MoE(s.vram, int(mi.get("base", 1)), int(mi["size"]),
                         ramkv=kv, kv_layout=opts.pop("kv_layout", kv_layout), **opts)
 
+    def materialize_model(s, key, path, chunk=8 << 20):
+        """Write a model's bytes from repovram bins to local disk (fast tier / llama.cpp)."""
+        mi = s.model_info(key)
+        if not mi or not mi.get("ready"):
+            raise IOError(f"no model loaded ({key})")
+        base = int(mi.get("base", 1)) * PAGE
+        size = int(mi["size"])
+        with open(path, "wb") as f:
+            for off in range(0, size, chunk):
+                f.write(s.vram.read(base + off, min(chunk, size - off)))
+        return path, size
+
     def tokenizer(s, key=None):
         from .tok import BPETokenizer
         from .gguf import GGUFOnRam
