@@ -10,6 +10,42 @@ def f16(b):
     return float(np.frombuffer(b, "<f2")[0])
 
 
+def ref_q3_k(x):
+    out = []
+    nb = len(x) // 110
+    for i in range(nb):
+        b = x[i * 110:(i + 1) * 110]
+        hm, qs, sc, d = b[0:32], b[32:96], b[96:108], f16(b[108:110])
+        aux = [0, 0, 0, 0]
+        for j in range(3):
+            aux[j] = int.from_bytes(sc[4 * j:4 * j + 4], "little")
+        tmp = aux[2]
+        aux[2] = ((aux[0] >> 4) & 0x0F0F0F0F) | (((tmp >> 4) & 0x03030303) << 4)
+        aux[3] = ((aux[1] >> 4) & 0x0F0F0F0F) | (((tmp >> 6) & 0x03030303) << 4)
+        aux[0] = (aux[0] & 0x0F0F0F0F) | (((tmp >> 0) & 0x03030303) << 4)
+        aux[1] = (aux[1] & 0x0F0F0F0F) | (((tmp >> 2) & 0x03030303) << 4)
+        scales = []
+        for u in aux:
+            scales += [((u >> (8 * k)) & 0xFF) - 256 if ((u >> (8 * k)) & 0xFF) > 127 else ((u >> (8 * k)) & 0xFF) for k in range(4)]
+        q = qs
+        m = 1
+        isx = 0
+        for n in range(0, 256, 128):
+            shift = 0
+            for j in range(4):
+                dl = d * (scales[isx] - 32); isx += 1
+                for l in range(16):
+                    qv = (q[l] >> shift) & 3
+                    out.append(dl * (qv - (0 if (hm[l] & m) else 4)))
+                dl = d * (scales[isx] - 32); isx += 1
+                for l in range(16):
+                    qv = (q[l + 16] >> shift) & 3
+                    out.append(dl * (qv - (0 if (hm[l + 16] & m) else 4)))
+                shift += 2; m <<= 1
+            q = q[32:]
+    return np.array(out, np.float32)
+
+
 def ref_q4_k(x):
     out = []
     nb = len(x) // 144
@@ -123,6 +159,11 @@ def rand_bytes(n, seed):
 def test_q8_0():
     b = rand_bytes(34 * 100, 1)
     assert bitwise_equal(G.dq_q8_0(b), ref_q8_0(b))
+
+
+def test_q3_k():
+    b = rand_bytes(110 * 50, 13)
+    assert bitwise_equal(G.dq_q3_k(b), ref_q3_k(b))
 
 
 def test_q4_k():

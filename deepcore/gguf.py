@@ -12,7 +12,7 @@ import ram16
 GGML = {0: (1, 4), 1: (1, 2), 2: (32, 18), 3: (32, 20), 6: (32, 22), 7: (32, 24), 8: (32, 34),
         10: (256, 84), 11: (256, 110), 12: (256, 144), 13: (256, 176), 14: (256, 210), 15: (256, 292),
         24: (1, 1), 25: (1, 2), 26: (1, 4), 27: (1, 8), 28: (1, 8), 30: (1, 2)}
-NAME = {0: "F32", 1: "F16", 8: "Q8_0", 10: "Q2_K", 12: "Q4_K", 13: "Q5_K", 14: "Q6_K", 30: "BF16"}
+NAME = {0: "F32", 1: "F16", 8: "Q8_0", 10: "Q2_K", 11: "Q3_K", 12: "Q4_K", 13: "Q5_K", 14: "Q6_K", 30: "BF16"}
 _SC = {0: "<B", 1: "<b", 2: "<H", 3: "<h", 4: "<I", 5: "<i", 6: "<f", 7: "<?", 10: "<Q", 11: "<q", 12: "<d"}
 
 
@@ -44,6 +44,38 @@ def _qk_scales(sc):
     d[:, 4:] = (sc[:, 8:12] & 0xF) | (hi << 4)
     m[:, 4:] = (sc[:, 8:12] >> 4) | ((sc[:, 4:8] >> 6) << 4)
     return d.astype(np.float32), m.astype(np.float32)
+
+
+def dq_q3_k(b):
+    """Q3_K: hmask[32], qs[64], scales[12], d(fp16) last. 16 scales x 6 bit."""
+    nb = len(b) // 110
+    a = np.frombuffer(b[:nb * 110], np.uint8).reshape(nb, 110)
+    hm = a[:, 0:32]
+    qs = a[:, 32:96].reshape(nb, 2, 32)
+    sc = a[:, 96:108]
+    d = a[:, 108:110].copy().view("<f2").astype(np.float32).reshape(-1)
+    u0 = sc[:, 0:4].copy().view("<u4").reshape(-1)
+    u1 = sc[:, 4:8].copy().view("<u4").reshape(-1)
+    u2 = sc[:, 8:12].copy().view("<u4").reshape(-1)
+    m1, m2 = np.uint32(0x0F0F0F0F), np.uint32(0x03030303)
+    aux0 = (u0 & m1) | (((u2 >> np.uint32(0)) & m2) << np.uint32(4))
+    aux1 = (u1 & m1) | (((u2 >> np.uint32(2)) & m2) << np.uint32(4))
+    aux2 = ((u0 >> np.uint32(4)) & m1) | (((u2 >> np.uint32(4)) & m2) << np.uint32(4))
+    aux3 = ((u1 >> np.uint32(4)) & m1) | (((u2 >> np.uint32(6)) & m2) << np.uint32(4))
+    raw = np.stack([aux0, aux1, aux2, aux3], axis=1).view(np.uint8).reshape(nb, 16).astype(np.int16)
+    scales = np.where(raw > 127, raw - 256, raw) - 32
+    out = np.empty((nb, 2, 4, 2, 16), np.float32)
+    for c in range(2):
+        for j in range(4):
+            shift = 2 * j
+            qv = ((qs[:, c, :] >> np.uint8(shift)) & np.uint8(3)).astype(np.float32)
+            bit = ((hm >> np.uint8(c * 4 + j)) & np.uint8(1)).astype(np.float32)
+            hb = np.concatenate([bit[:, :16], bit[:, 16:32]], axis=1)   # (nb,32)
+            val = qv - (1.0 - hb) * 4.0
+            dl = d[:, None] * scales[:, c * 8 + j * 2: c * 8 + j * 2 + 2]
+            out[:, c, j, 0, :] = dl[:, 0:1] * val[:, :16]
+            out[:, c, j, 1, :] = dl[:, 1:2] * val[:, 16:32]
+    return out.reshape(nb * 256)
 
 
 def dq_q4_k(b):
@@ -119,7 +151,7 @@ def dq_q6_k(b):
     return out.reshape(nb * 256)
 
 
-_DEQ = {0: dq_f32, 1: dq_f16, 8: dq_q8_0, 12: dq_q4_k, 13: dq_q5_k, 14: dq_q6_k}
+_DEQ = {0: dq_f32, 1: dq_f16, 8: dq_q8_0, 11: dq_q3_k, 12: dq_q4_k, 13: dq_q5_k, 14: dq_q6_k}
 
 
 def dequant(b, gtype):
@@ -133,7 +165,7 @@ def dequant(b, gtype):
 
 
 def bits_per_weight(gtype):
-    return {0: 32.0, 1: 16.0, 30: 16.0, 8: 8.5, 12: 4.5, 13: 5.5, 14: 6.5625}[gtype]
+    return {0: 32.0, 1: 16.0, 30: 16.0, 8: 8.5, 11: 3.4375, 12: 4.5, 13: 5.5, 14: 6.5625}[gtype]
 
 
 # ============================ header parse ================================
@@ -328,7 +360,7 @@ class GGUFOnRam:
     def gather_rows(s, name, rows, dtype=np.float32):
         """Row gather for row-major tensors [rows, cols] (ne[0]=cols). Reads only needed blocks."""
         t = s.tensors[name]
-        if t.type not in (0, 1, 30, 8, 12, 13, 14):
+        if t.type not in (0, 1, 30, 8, 11, 12, 13, 14):
             raise ValueError(t.type)
         cols = t.dims[0]
         blk_e, blk_b = GGML[t.type]
