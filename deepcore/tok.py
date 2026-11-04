@@ -29,6 +29,18 @@ def _bytes_to_unicode():
     return dict(zip(bs, [chr(c) for c in cs])), {chr(c): b for b, c in zip(bs, cs)}
 
 
+_THINK = None
+
+
+def clean_reply(text):
+    """Hide Qwen3 thinking blocks from streamed/final output."""
+    import re
+    global _THINK
+    if _THINK is None:
+        _THINK = re.compile(r"<think>.*?(?:</think>|$)", re.S)
+    return _THINK.sub("", text or "").strip()
+
+
 def apply_no_think(messages, model_key=None):
     """Qwen3-1.7B is a thinking model; /no_think keeps demo replies short."""
     if not model_key or "1.7b" not in str(model_key):

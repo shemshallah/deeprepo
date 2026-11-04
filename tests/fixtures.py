@@ -169,7 +169,7 @@ TINY = dict(L=2, d=64, nh=8, nkv=2, hd=8, nff=32, ne=4, nu=2, vocab=128, eps=1e-
 TINY_DENSE = dict(L=2, d=64, nh=8, nkv=2, hd=8, nff=128, vocab=128, eps=1e-6, rope=1e4)
 
 
-def make_tiny_dense_gguf(path, seed=17, gtype=0):
+def make_tiny_dense_gguf(path, seed=17, gtype=0, tie=False):
     """Random-weight dense qwen3 GGUF (no experts) for the fast-tier engine path."""
     from deepcore.gguf import write_gguf
     rng = np.random.default_rng(seed)
@@ -203,7 +203,8 @@ def make_tiny_dense_gguf(path, seed=17, gtype=0):
             (p + "ffn_up.weight", [c["d"], c["nff"]], gtype, rng.standard_normal((c["nff"], c["d"])).astype(np.float32) * 0.08),
             (p + "ffn_down.weight", [c["nff"], c["d"]], gtype, rng.standard_normal((c["d"], c["nff"])).astype(np.float32) * 0.08),
         ]
-    tensors.append(("output.weight", [c["d"], c["vocab"]], gtype, rng.standard_normal((c["vocab"], c["d"])).astype(np.float32) * 0.2))
+    if not tie:
+        tensors.append(("output.weight", [c["d"], c["vocab"]], gtype, rng.standard_normal((c["vocab"], c["d"])).astype(np.float32) * 0.2))
     return write_gguf(path, meta, tensors)
 
 

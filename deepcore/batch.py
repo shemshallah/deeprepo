@@ -148,7 +148,7 @@ def _answer(env, repo, token, issue, model_key, max_tokens, log):
         log(f"batch: issue {issue} has no pending user turn")
         return ""
     tok = env.tokenizer(model_key)
-    from .tok import apply_no_think
+    from .tok import apply_no_think, clean_reply
     ids = tok.chat_ids(apply_no_think(req["messages"], model_key))
     kv = MemKV()
     mi = env.model_info(model_key) or {}
@@ -181,7 +181,7 @@ def _answer(env, repo, token, issue, model_key, max_tokens, log):
         if made >= max_tokens:
             break
         logits = eng.forward([nid], len(ids) + made - 1)
-    _update(repo, token, handle, text, done=True)
+    _update(repo, token, handle, clean_reply(text), done=True)
     log(f"batch: issue {issue} done in {time.time()-t0:.0f}s, {len(text)} chars")
     return text
 

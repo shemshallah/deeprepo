@@ -12,7 +12,7 @@ import time
 import ram16
 
 from . import ring
-from .tok import apply_no_think
+from .tok import apply_no_think, clean_reply
 from .meter import BudgetExceeded
 from .status import StatusBoard
 
@@ -162,8 +162,9 @@ class Coordinator:
         q = s.queue
         handle = q.begin(req)
         done, text = s.run_job(job_id, time.time() + minutes * 60,
-                               on_token=lambda t: q.update(handle, t or "…"))
+                               on_token=lambda t: q.update(handle, clean_reply(t) or "…"))
         if done:
+            text = clean_reply(text)
             q.finish(handle, text or "(no output)")
             final = regs.get(f"run/{job_id}/done") or {}
             gen_ids = []

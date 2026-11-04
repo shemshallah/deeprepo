@@ -158,8 +158,12 @@ class Qwen3MoE:
         return w
 
     def _load_head(s):
-        """Dequantize the output (lm) head into f16 in bounded chunks: no 1.2 GiB f32 transient."""
-        t = s.g.tensors["output.weight"]
+        """Cache the lm head in f16 chunks. Tied models (no output.weight) use token_embd —
+        without this the engine would gather/re-dequant all 151,936 rows every token."""
+        if s.head is not None:
+            return
+        name = "output.weight" if "output.weight" in s.g.tensors else "token_embd.weight"
+        t = s.g.tensors[name]
         cols = int(t.dims[0])
         rows = int(t.dims[-1])
         be, bb = G.GGML[t.type]
@@ -168,35 +172,38 @@ class Qwen3MoE:
         step = 4096
         for c in range(0, rows, step):
             n = min(step, rows - c)
-            blob = s.g.read_range("output.weight", c * brow, n * brow)
+            blob = s.g.read_range(name, c * brow, n * brow)
             s.head[c:c + n] = G.dequant(blob, t.type).reshape(n, cols).astype(np.float16)
             s.st["vram_bytes"] += n * brow
             s.st["vram_reads"] += 1
 
     def _logits(s, xn):
-        """Streaming head: bounded f32 chunks over the f16 head cache (f32 dequant in strict mode)."""
-        if "output.weight" not in s.g.tensors:
-            W = s.g.gather_rows("token_embd.weight", np.arange(s.nvoc))
-            return (xn @ W.T)[0]
+        """Streaming lm head, with the tied-embedding case cached once.
+
+        Untied: output.weight. Tied: token_embd (Qwen3-1.7B/4B). Never gather 151k rows
+        per token; f16-cache the head in bounded chunks (f32 streaming in strict mode).
+        """
+        name = "output.weight" if "output.weight" in s.g.tensors else "token_embd.weight"
+        t = s.g.tensors[name]
+        cols, rows = int(t.dims[0]), int(t.dims[-1])
+        be, bb = G.GGML[t.type]
+        brow = cols // be * bb
         if s.strict:
-            t = s.g.tensors["output.weight"]
-            cols = int(t.dims[0]); rows = int(t.dims[-1])
-            be, bb = G.GGML[t.type]; brow = cols // be * bb
             out = np.empty(rows, np.float32)
             step = 4096
             for c in range(0, rows, step):
                 n = min(step, rows - c)
-                blob = s.g.read_range("output.weight", c * brow, n * brow)
+                blob = s.g.read_range(name, c * brow, n * brow)
                 w = G.dequant(blob, t.type).reshape(n, cols)
                 out[c:c + n] = (xn @ w.T)[0]
                 s.st["vram_bytes"] += n * brow
             return out
         if s.head is None:
             s._load_head()
-        out = np.empty(s.nvoc, np.float32)
+        out = np.empty(rows, np.float32)
         step = 8192
-        for c in range(0, s.nvoc, step):
-            n = min(step, s.nvoc - c)
+        for c in range(0, rows, step):
+            n = min(step, rows - c)
             out[c:c + n] = (xn @ s.head[c:c + n].astype(np.float32).T)[0]
         return out
 

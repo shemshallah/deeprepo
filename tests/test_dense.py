@@ -46,11 +46,11 @@ def dense_ref(w, c, ids, pos0=0):
     return (xn @ w["output.weight"].T)[0]
 
 
-def test_dense_engine_matches():
+def test_dense_engine_matches(tie=False):
     tmp = tempfile.mkdtemp()
     try:
         gguf = os.path.join(tmp, "dense.gguf")
-        make_tiny_dense_gguf(gguf)
+        make_tiny_dense_gguf(gguf, tie=tie)
         size = os.path.getsize(gguf)
         vdir, rdir = os.path.join(tmp, "vram"), os.path.join(tmp, "ram")
         os.makedirs(vdir); os.makedirs(rdir)
@@ -66,13 +66,16 @@ def test_dense_engine_matches():
         eng = Qwen3MoE(vram, 1, size, ramkv=ram, kv_layout=kv, strict=True, f16_cache_mb=4)
         ids = [5, 12, 33, 4]
         got = eng.forward(ids, 0)
+        if tie:
+            w = dict(w); w["output.weight"] = w["token_embd.weight"]
         ref = dense_ref(w, c, ids, 0)
         assert np.allclose(got, ref, atol=1e-4, rtol=1e-5), np.abs(got - ref).max()
-        print("  dense qwen3 engine matches dense reference")
+        print(f"  dense qwen3 engine matches dense reference (tie={tie})")
     finally:
         shutil.rmtree(tmp)
 
 
 if __name__ == "__main__":
-    test_dense_engine_matches()
+    test_dense_engine_matches(tie=False)
+    test_dense_engine_matches(tie=True)
     print("dense tests passed")
