@@ -56,14 +56,14 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p /tmp/mnt
-          PYTHONPATH="$PWD" python tools/repovram_fuse.py /tmp/mnt \
+          env -u GH_TOKEN -u GITHUB_TOKEN PYTHONPATH="$PWD" python tools/repovram_fuse.py /tmp/mnt \
             --model "$MODEL" --cache-pages "${{ inputs.cache_pages }}" > /tmp/fuse.log 2>&1 &
           FUSE_PID=$!
           for i in $(seq 1 180); do
             if ! kill -0 "$FUSE_PID" 2>/dev/null; then cat /tmp/fuse.log; exit 1; fi
             if [ -r /tmp/mnt/model.gguf ] && [ "$(stat -c%s /tmp/mnt/model.gguf 2>/dev/null || echo 0)" -gt 0 ]; then
               echo "mounted after ${i}s: $(stat -c%s /tmp/mnt/model.gguf) bytes"
-              python -c 'print("MOUNT_HEAD", open("/tmp/mnt/model.gguf","rb").read(16).hex())'
+              python -c 'print("MOUNT_HEAD", open("/tmp/mnt/model.gguf","rb").read(16).hex())' || true
               cat /tmp/fuse.log
               exit 0
             fi
