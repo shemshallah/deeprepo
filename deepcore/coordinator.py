@@ -124,7 +124,8 @@ class Coordinator:
         env, regs = s.env, s.env.regs
         if env.budget.exhausted():
             raise BudgetExceeded("daily budget exhausted")
-        tok = env.tokenizer()
+        model_key = os.environ.get("CHAT_MODEL") or None
+        tok = env.tokenizer(model_key)
         if max_tokens is None:
             max_tokens = int(os.environ.get("MAX_REPLY_TOKENS", "48"))
         ids = tok.chat_ids(req.messages)
@@ -150,6 +151,7 @@ class Coordinator:
                 "gen": {"max_tokens": left, "temp": 0.7, "top_k": 20, "top_p": 0.8,
                         "penalty": 1.05, "seed": int(time.time()) % 2**31,
                         "f16_cache_mb": 1856, "chunk": 192},
+                "model": model_key,
                 "prefix_len": prefix_len,
                 "t": int(time.time())})
             regs.put(f"sess/active/{req.id}", {"job": job_id, "t": int(time.time())})
@@ -232,10 +234,12 @@ def main(argv):
         if a.op == "serve":
             c.serve(minutes=a.minutes)
         else:
-            tok = env.tokenizer()
+            model_key = os.environ.get("CHAT_MODEL") or None
+            tok = env.tokenizer(model_key)
             ids = tok.chat_ids([{"role": "user", "content": a.prompt or "Hello"}])
             job_id = f"j{int(time.time())}"
             env.regs.put(f"job/{job_id}", {"id": job_id, "issue": 0, "prompt_ids": ids,
+                                           "model": model_key,
                                            "gen": {"max_tokens": a.max_tokens, "seed": int(time.time()) % 2**31,
                                                    "f16_cache_mb": 1856, "chunk": 192},
                                            "t": int(time.time())})

@@ -29,6 +29,7 @@ env:
   DEEPREPO_VRAM: ${{ vars.REPOVRAM_REPO || format('{0}/repovram', github.repository_owner) }}
   DEEPREPO_MAIN: ${{ github.repository }}
   MAX_REPLY_TOKENS: "48"
+  CHAT_MODEL: ${{ vars.CHAT_MODEL }}
   DEEPREPO_RAM_BACKEND: ${{ vars.RAM_BACKEND || 'github' }}
   DEEPREPO_VRAM_BACKEND: ${{ vars.VRAM_BACKEND || 'github' }}
   DEEPREPO_MIDDLE_URL: ${{ vars.MIDDLE_URL }}

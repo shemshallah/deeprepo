@@ -39,7 +39,7 @@ class FixtureEnv(Env):
         s.api = ApiMeter()
         s._model = {"ready": True, "size": size, "weight_pages": wp, "key": "tiny"}
 
-    def model_info(s):
+    def model_info(s, key=None):
         return s._model
 
 

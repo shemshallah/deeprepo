@@ -76,6 +76,19 @@ def test_import_tiles_and_engine_reads():
         ref = dense_forward(w, dict(TINY), ids, 0)
         assert np.allclose(got, ref, atol=1e-4, rtol=1e-5)
         print(f"  import -> {res['bins']} bin(s), resume idempotent, engine matches dense")
+        # second model at a different base page (Q3-alongside-Q4 layout)
+        res3 = import_model(store, LocalJournal(os.path.join(tmp, "j3")), FakeHf(data), resume=False,
+                            work=tmp, base_page=510, key="second")
+        assert res3["base"] == 510 and res3["bins"] == [1], res3
+        vram2 = make_ram(vdir)
+        ram2 = make_ram(os.path.join(tmp, "ram"), journal_dir=os.path.join(tmp, "j4"), writer=True, cache_pages=32)
+        from deepcore.geom import read_super as _rs
+        lay2 = _rs(ram2)["layout"]
+        kv2 = {"base": lay2["kv"][0] * PAGE, "bytes": lay2["kv"][1] * PAGE}
+        eng2 = Qwen3MoE(vram2, 510, len(data), ramkv=ram2, kv_layout=kv2, f16_cache_mb=4, strict=True)
+        got2 = eng2.forward(ids, 0)
+        assert np.allclose(got2, ref, atol=1e-4, rtol=1e-5)
+        print("  second model imported at page 510 and reads correctly")
     finally:
         shutil.rmtree(tmp)
 

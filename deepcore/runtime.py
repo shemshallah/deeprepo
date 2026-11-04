@@ -68,22 +68,24 @@ class Env:
         s.regs.commit()
         return True
 
-    def model_info(s):
-        return s.regs.get("vram/model")
+    def model_info(s, key=None):
+        return s.regs.get(f"vram/models/{key}") if key else s.regs.get("vram/model")
 
-    def engine(s, **opts):
-        mi = s.model_info()
+    def engine(s, key=None, **opts):
+        mi = s.model_info(key)
         if not mi or not mi.get("ready"):
-            raise IOError("no model loaded in repovram (run load-model)")
+            raise IOError(f"no model loaded in repovram ({key or 'default'}; run load-model)")
         from .engine import Qwen3MoE
         kv_layout = {"base": read_super(s.ram)["layout"]["kv"][0] * PAGE,
                      "bytes": read_super(s.ram)["layout"]["kv"][1] * PAGE}
-        return Qwen3MoE(s.vram, 1, int(mi["size"]), ramkv=s.ram if s.writer else None,
-                        kv_layout=kv_layout, **opts)
+        return Qwen3MoE(s.vram, int(mi.get("base", 1)), int(mi["size"]),
+                        ramkv=s.ram if s.writer else None, kv_layout=kv_layout, **opts)
 
-    def tokenizer(s):
+    def tokenizer(s, key=None):
         from .tok import BPETokenizer
         from .gguf import GGUFOnRam
-        mi = s.model_info()
-        g = GGUFOnRam(s.vram, 1, int(mi["size"]))
+        mi = s.model_info(key)
+        if not mi:
+            raise IOError(f"no model loaded ({key or 'default'})")
+        g = GGUFOnRam(s.vram, int(mi.get("base", 1)), int(mi["size"]))
         return BPETokenizer.from_meta(g.meta)

@@ -64,7 +64,7 @@ def cmd_bootstrap(argv):
     return 0
 
 
-def cmd_load_model(env, url, model_key="qwen3-30b-a3b-q4_k_m", resume=True):
+def cmd_load_model(env, url, model_key="qwen3-30b-a3b-q4_k_m", resume=True, base="auto", activate=False):
     from .store import HfFile
     from .tiers import import_model
     import ram16
@@ -78,10 +78,29 @@ def cmd_load_model(env, url, model_key="qwen3-30b-a3b-q4_k_m", resume=True):
         from .store import open_store
         jstore = open_store(env.vram_repo, "repovram-j", getattr(env, "vram_backend", "github"),
                             env.token, getattr(env, "middle_url", ""), getattr(env, "middle_token", ""))
-    res = import_model(env.vram.tier_store, jstore, hf, budget=None, resume=resume)
-    env.regs.put("vram/model", {"key": model_key, "ready": True, "size": res["size"],
-                                "weight_pages": res["weight_pages"], "bins": res["bins"],
-                                "url": url, "t": int(time.time())})
+    from . import PPS
+    existing = env.regs.get(f"vram/models/{model_key}")
+    if base in (None, "", "auto"):
+        if existing:
+            base = int(existing.get("base", 1))
+        else:
+            maxend = 1
+            recs = [env.regs.get(k) for k in env.regs.keys("vram/models/")]
+            recs.append(env.regs.get("vram/model"))
+            for m in recs:
+                if m:
+                    maxend = max(maxend, int(m.get("base", 1)) + int(m.get("weight_pages", 0)))
+            base = ((maxend + PPS - 1) // PPS) * PPS or 1
+    else:
+        base = int(base)
+    res = import_model(env.vram.tier_store, jstore, hf, budget=None, resume=resume,
+                       base_page=base, key=model_key)
+    rec = {"key": model_key, "ready": True, "size": res["size"],
+           "weight_pages": res["weight_pages"], "bins": res["bins"], "base": res["base"],
+           "url": url, "t": int(time.time())}
+    env.regs.put(f"vram/models/{model_key}", rec)
+    if activate or not env.regs.get("vram/model"):
+        env.regs.put("vram/model", rec)
     env.regs.commit()
     print(json.dumps(res))
     return 0
@@ -220,7 +239,8 @@ def main(argv=None):
     if cmd == "load-model":
         from .runtime import Env
         return cmd_load_model(Env(writer=True), arg("--url"), arg("--key", "qwen3-30b-a3b-q4_k_m"),
-                              resume="--fresh" not in argv)
+                              resume="--fresh" not in argv, base=arg("--base", "auto"),
+                              activate="--activate" in argv)
     if cmd == "gate":
         from .runtime import Env
         return cmd_gate(Env(writer=True), "--fail" not in argv, arg("--note", ""))

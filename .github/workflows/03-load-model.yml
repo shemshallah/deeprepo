@@ -13,6 +13,14 @@ on:
         description: Model key recorded in the registers
         type: string
         default: qwen3-30b-a3b-instruct-2507-q4_k_m
+      base:
+        description: Start page in repovram (auto = first free bin after existing models)
+        type: string
+        default: auto
+      activate:
+        description: Make this the default model (chat still honors CHAT_MODEL)
+        type: boolean
+        default: false
       fresh:
         description: Ignore previous import progress (re-upload all bins)
         type: boolean
@@ -59,7 +67,9 @@ jobs:
           MODEL_KEY: ${{ inputs.key }}
         run: |
           set -o pipefail
-          python -m deepcore load-model --url "$MODEL_URL" --key "$MODEL_KEY" ${{ inputs.fresh && '--fresh' || '' }} | tee load.json
+          python -m deepcore load-model --url "$MODEL_URL" --key "$MODEL_KEY" \
+            --base "${{ inputs.base }}" ${{ inputs.activate && '--activate' || '' }} \
+            ${{ inputs.fresh && '--fresh' || '' }} | tee load.json
 
       - name: Verify + summary
         run: |

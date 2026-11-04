@@ -4,6 +4,7 @@ trimmed compaction of reporam, and the hierarchical memory registers.
 import hashlib
 import json
 import os
+import re
 import struct
 import time
 
@@ -153,19 +154,21 @@ def _remove_blob(store, name):
     return False
 
 
-def import_model(vram_store, jstore, hf, budget=None, resume=True, work="/tmp", log=print):
-    """Stream the GGUF from HF and tile it into repovram bins, one bin on disk at a time.
-    Bin b holds vram pages [max(1,b*PPS), min(wp+1,(b+1)*PPS)); source bytes for page p
-    live at (p-1)*PAGE. Resumable: bins already uploaded (imp records) are skipped."""
+def import_model(vram_store, jstore, hf, budget=None, resume=True, work="/tmp", log=print,
+                 base_page=1, key="model"):
+    """Stream a GGUF from HF and tile it into repovram bins at `base_page`, one bin at a
+    time. Multiple models can coexist (the registry records each base). Resumable per key."""
     if hasattr(vram_store, "_req"):
         ensure_release(vram_store, vram_store.tag)
     total = hf.size
     wp = model_geometry(total)
-    log(f"import: {total/2**30:.2f} GiB -> {wp} vram pages")
-    if wp + 1 > tier_pages():
-        raise IOError(f"model needs {wp+1} pages, tier holds {tier_pages()} - pick a smaller quant")
+    endp = int(base_page) + wp
+    log(f"import[{key}]: {total/2**30:.2f} GiB -> pages {base_page}..{endp-1} ({wp})")
+    if base_page < 1 or endp - 1 > tier_pages():
+        raise IOError(f"model needs pages {base_page}..{endp-1}, tier holds {tier_pages()}")
+    pat = rf"imp-{re.escape(key)}-\d{{6}}\.json"
     seq, bins_done, etag0 = 0, set(), hf.etag
-    for name, _asset in jstore.list(r"imp-\d+\.json"):
+    for name, _asset in jstore.list(pat):
         r = json.loads(jstore.get(name))
         seq = max(seq, r["seq"])
         if r.get("bin", -1) >= 0:
@@ -174,16 +177,15 @@ def import_model(vram_store, jstore, hf, budget=None, resume=True, work="/tmp", 
             raise IOError("source changed since last import (ETag mismatch); re-run with resume=False")
     if not resume:
         bins_done, seq = set(), 0
-    sha = hashlib.sha256()  # over all source bytes streamed in THIS run
-    for b in range(BINS):
-        lo, hi = _bin_used_extent(b, wp + 1)
-        if lo >= hi:
-            break
+    sha = hashlib.sha256()
+    b0, bend = base_page // PPS, (endp - 1) // PPS
+    for b in range(b0, bend + 1):
         if b in bins_done:
-            log(f"import: bin {b:02d} already present - skipping")
+            log(f"import[{key}]: bin {b:02d} already present - skipping")
             continue
-        bin_src = (lo - 1) * PAGE
-        page0_off = BIN_HDR + (lo - b * PPS) * PAGE     # bin 0 keeps payload page 0 = superblock
+        lo, hi = max(base_page, b * PPS), min(endp, (b + 1) * PPS)
+        bin_src = (lo - base_page) * PAGE
+        payload_off = BIN_HDR + (lo - b * PPS) * PAGE
         size = BIN_HDR + (hi - b * PPS) * PAGE
         name = f"mem-{b:02d}.bin"
         path = os.path.join(work, name)
@@ -191,8 +193,6 @@ def import_model(vram_store, jstore, hf, budget=None, resume=True, work="/tmp", 
         t0 = time.time()
         sb_page = None
         if b == 0:
-            # preserve the bootstrap superblock page; if it is missing/not DPRSB1, regenerate
-            # it deterministically (never ship a weights bin without a valid superblock).
             try:
                 a = vram_store.asset(name)
                 if a.read(BIN_HDR, 6) == b"DPRSB1":
@@ -201,6 +201,7 @@ def import_model(vram_store, jstore, hf, budget=None, resume=True, work="/tmp", 
             except Exception as e:
                 log(f"import: warning: could not fetch existing superblock page: {e!r}")
             if not sb_page:
+                from .geom import plan_vram_layout
                 sb_page = pack_super("vram", plan_vram_layout(tier_pages()))
                 log("import: regenerated the vram superblock page")
         with open(path, "r+b" if exists else "wb") as f:
@@ -211,13 +212,13 @@ def import_model(vram_store, jstore, hf, budget=None, resume=True, work="/tmp", 
             if sb_page:
                 f.seek(BIN_HDR)
                 f.write(sb_page)
-            f.seek(page0_off)
+            f.seek(payload_off)
             pos, to_read = bin_src, (hi - lo) * PAGE
             while to_read > 0:
                 k = min(8 << 20, to_read)
                 avail = max(0, hf.size - pos)
                 if avail == 0:
-                    data = b"\0" * k  # final page is not page-aligned: pad zeros
+                    data = b"\0" * k
                 else:
                     data = hf.read(pos, min(k, avail))
                     if len(data) < k:
@@ -227,24 +228,24 @@ def import_model(vram_store, jstore, hf, budget=None, resume=True, work="/tmp", 
                 pos += k
                 to_read -= k
             f.truncate(size)
-        payload = (hi - lo) * PAGE
         if budget:
-            budget.record("down", payload)
+            budget.record("down", (hi - lo) * PAGE)
             budget.record("up", size)
-        log(f"import: {name} {size/2**20:.0f} MiB streamed in {time.time()-t0:.0f}s; uploading")
-        _remove_blob(vram_store, name)  # release assets must be unique (bin-0 replaces bootstrap)
+        log(f"import[{key}]: {name} {size/2**20:.0f} MiB streamed in {time.time()-t0:.0f}s; uploading")
+        _remove_blob(vram_store, name)
         vram_store.put_file(name, path)
         os.remove(path)
         bins_done.add(b)
         seq += 1
-        jstore.put(f"imp-{seq:06d}.json", json.dumps({
-            "seq": seq, "bin": b, "done_bins": sorted(bins_done), "etag": etag0,
-            "t": int(time.time())}).encode())
-    jstore.put(f"imp-{seq+1:06d}.json", json.dumps({
-        "seq": seq + 1, "bin": -1, "done": True, "size": total, "weight_pages": wp,
-        "etag": etag0, "t": int(time.time())}).encode())
-    log("import: complete")
-    return {"weight_pages": wp, "size": total, "bins": sorted(bins_done), "sha_partial": sha.hexdigest()[:16]}
+        jstore.put(f"imp-{key}-{seq:06d}.json", json.dumps({
+            "seq": seq, "key": key, "base": int(base_page), "bin": b,
+            "done_bins": sorted(bins_done), "etag": etag0, "t": int(time.time())}).encode())
+    jstore.put(f"imp-{key}-{seq+1:06d}.json", json.dumps({
+        "seq": seq + 1, "key": key, "base": int(base_page), "bin": -1, "done": True,
+        "size": total, "weight_pages": wp, "etag": etag0, "t": int(time.time())}).encode())
+    log(f"import[{key}]: complete")
+    return {"weight_pages": wp, "size": total, "bins": sorted(bins_done),
+            "base": int(base_page), "sha_partial": sha.hexdigest()[:16]}
 
 
 # ---------------- trimmed compaction (reporam) ----------------
