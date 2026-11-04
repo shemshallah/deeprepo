@@ -29,6 +29,18 @@ def _bytes_to_unicode():
     return dict(zip(bs, [chr(c) for c in cs])), {chr(c): b for b, c in zip(bs, cs)}
 
 
+def apply_no_think(messages, model_key=None):
+    """Qwen3-1.7B is a thinking model; /no_think keeps demo replies short."""
+    if not model_key or "1.7b" not in str(model_key):
+        return messages
+    out = [dict(m) for m in messages]
+    for m in reversed(out):
+        if m.get("role") == "user":
+            m["content"] = (m.get("content") or "") + " /no_think"
+            break
+    return out
+
+
 class BPETokenizer:
     def __init__(s, tokens, token_types, merges, pre=QWEN2_PRE):
         s.vocab = list(tokens)

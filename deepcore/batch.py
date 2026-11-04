@@ -148,7 +148,8 @@ def _answer(env, repo, token, issue, model_key, max_tokens, log):
         log(f"batch: issue {issue} has no pending user turn")
         return ""
     tok = env.tokenizer(model_key)
-    ids = tok.chat_ids(req["messages"])
+    from .tok import apply_no_think
+    ids = tok.chat_ids(apply_no_think(req["messages"], model_key))
     kv = MemKV()
     mi = env.model_info(model_key) or {}
     f16 = 8000 if 0 < int(mi.get("size", 1)) < (6 << 30) else 1024

@@ -12,6 +12,7 @@ import time
 import ram16
 
 from . import ring
+from .tok import apply_no_think
 from .meter import BudgetExceeded
 from .status import StatusBoard
 
@@ -130,7 +131,7 @@ class Coordinator:
         tok = env.tokenizer(model_key)
         if max_tokens is None:
             max_tokens = int(os.environ.get("MAX_REPLY_TOKENS", "48"))
-        ids = tok.chat_ids(req.messages)
+        ids = tok.chat_ids(apply_no_think(req.messages, model_key))
         active = regs.get(f"sess/active/{req.id}")
         prefix_len = 0
         if not active:
@@ -238,7 +239,7 @@ def main(argv):
         else:
             model_key = os.environ.get("CHAT_MODEL") or None
             tok = env.tokenizer(model_key)
-            ids = tok.chat_ids([{"role": "user", "content": a.prompt or "Hello"}])
+            ids = tok.chat_ids(apply_no_think([{"role": "user", "content": a.prompt or "Hello"}], model_key))
             job_id = f"j{int(time.time())}"
             env.regs.put(f"job/{job_id}", {"id": job_id, "issue": 0, "prompt_ids": ids,
                                            "model": model_key,
