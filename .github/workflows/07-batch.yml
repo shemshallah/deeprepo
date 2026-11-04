@@ -44,6 +44,7 @@ jobs:
       - run: pip install -r requirements-core.txt
       - name: Dispatch pending issues to the ring
         run: |
+          set -o pipefail
           python -m deepcore batch --limit "${{ inputs.limit }}" \
             --model "${{ inputs.model }}" --max-tokens "${{ inputs.max_tokens }}" | tee batch.json
       - name: Summary

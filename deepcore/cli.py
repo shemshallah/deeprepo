@@ -247,6 +247,7 @@ def main(argv=None):
     if cmd == "batch":
         from . import batch
         from . import ring
+        from .runtime import Env
         env = Env(writer=False)
         env.main_repo = env.main_repo or __import__("os").environ.get("GITHUB_REPOSITORY", "")
         slots = ring.ring_slots(env.main_repo)
