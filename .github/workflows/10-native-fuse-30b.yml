@@ -1,0 +1,138 @@
+name: 10 native fuse 30B
+# Native C++ FUSE reader over repovram + hot-page pinning, benchmarked with llama.cpp.
+on:
+  workflow_dispatch:
+    inputs:
+      model:
+        description: model key
+        type: string
+        default: qwen3-30b-a3b-instruct-2507-q4_k_m
+      max_tokens:
+        description: decode tokens
+        type: string
+        default: "8"
+      cache_pages:
+        description: native page cache
+        type: string
+        default: "512"
+      pin_pages:
+        description: pages to pin after repeated access
+        type: string
+        default: "256"
+
+permissions:
+  contents: read
+
+env:
+  GH_TOKEN: ${{ secrets.DEEPREPO_PAT }}
+  DEEPREPO_RAM: ${{ vars.REPORAM_REPO || format('{0}/reporam', github.repository_owner) }}
+  DEEPREPO_VRAM: ${{ vars.REPOVRAM_REPO || format('{0}/repovram', github.repository_owner) }}
+  DEEPREPO_MAIN: ${{ github.repository }}
+  MODEL: ${{ inputs.model }}
+
+jobs:
+  bench:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements-core.txt
+
+      - name: Build native FUSE + llama.cpp
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq cmake pkg-config libfuse3-dev libcurl4-openssl-dev fuse3 fuse g++
+          test -c /dev/fuse
+          cmake -S native/repovram-fuse -B /tmp/repovram-build -DCMAKE_BUILD_TYPE=Release
+          cmake --build /tmp/repovram-build --parallel 2
+          test -x /tmp/repovram-build/repovram-fuse
+          curl -fsSL https://github.com/ggml-org/llama.cpp/releases/download/b12098/llama-b12098-bin-ubuntu-x64.tar.gz -o /tmp/llama.tar.gz
+          tar xzf /tmp/llama.tar.gz -C /tmp
+
+      - name: Model geometry
+        run: |
+          python - <<'EOF' > /tmp/model.env
+          import os
+          from deepcore.runtime import Env
+          e = Env(writer=False)
+          key = os.environ["MODEL"]
+          mi = e.model_info(key)
+          assert mi and mi.get("ready"), key
+          print(f"BASE={int(mi['base'])}")
+          print(f"SIZE={int(mi['size'])}")
+          print(f"KEY={key}")
+          EOF
+          cat /tmp/model.env
+
+      - name: Mount native FUSE
+        run: |
+          set -euo pipefail
+          source /tmp/model.env
+          mkdir -p /tmp/mnt
+          REPOVRAM_FUSE_HEAT=/tmp/heat.tsv /tmp/repovram-build/repovram-fuse /tmp/mnt \
+            --repo "$DEEPREPO_VRAM" --tag repovram --base "$BASE" --size "$SIZE" \
+            --pps 510 --ns 16 --cache-pages "${{ inputs.cache_pages }}" \
+            --pin-pages "${{ inputs.pin_pages }}" > /tmp/fuse.log 2>&1 &
+          FUSE_PID=$!
+          for i in $(seq 1 120); do
+            if ! kill -0 "$FUSE_PID" 2>/dev/null; then cat /tmp/fuse.log; exit 1; fi
+            if [ -r /tmp/mnt/model.gguf ] && [ "$(stat -c%s /tmp/mnt/model.gguf 2>/dev/null || echo 0)" -gt 0 ]; then
+              echo "mounted after ${i}s"
+              python -c 'print("MOUNT_HEAD", open("/tmp/mnt/model.gguf","rb").read(16).hex())'
+              cat /tmp/fuse.log
+              exit 0
+            fi
+            sleep 1
+          done
+          cat /tmp/fuse.log; exit 1
+
+      - name: Benchmark
+        run: |
+          set -euo pipefail
+          /tmp/llama-b12098/llama-server -m /tmp/mnt/model.gguf \
+            --host 127.0.0.1 --port 18082 -c 512 -t 4 -ngl 0 --jinja --no-warmup --fit off \
+            2>&1 | tee /tmp/llama-server.log &
+          echo $! > /tmp/llama.pid
+          for i in $(seq 1 600); do
+            if curl -sf http://127.0.0.1:18082/health >/dev/null 2>&1; then echo "healthy after ${i}s"; break; fi
+            if ! kill -0 $(cat /tmp/llama.pid) 2>/dev/null; then tail -100 /tmp/llama-server.log; exit 1; fi
+            sleep 1
+          done
+          curl -sf http://127.0.0.1:18082/health >/dev/null
+          T0=$(date +%s)
+          curl -sS --max-time 5400 -H 'Content-Type: application/json' \
+            -d "{\"model\":\"local\",\"messages\":[{\"role\":\"user\",\"content\":\"Tell me a short sentence about the sea.\"}],\"max_tokens\":${{ inputs.max_tokens }},\"temperature\":0,\"stream\":false}" \
+            http://127.0.0.1:18082/v1/chat/completions > /tmp/bench.json
+          echo "wall=$(( $(date +%s)-T0 ))s"
+          python - <<'EOF'
+          import json
+          d=json.load(open("/tmp/bench.json")); t=d.get("timings", {})
+          print("BENCH", json.dumps(t))
+          print("REPLY", repr((d.get("choices") or [{}])[0].get("message", {}).get("content", "")[:200]))
+          print(f"DECODE {t.get('predicted_per_second',0):.3f} tok/s  PREFILL {t.get('prompt_per_second',0):.2f} tok/s")
+          EOF
+          tail -20 /tmp/llama-server.log || true
+          kill $(cat /tmp/llama.pid) 2>/dev/null || true
+          sleep 2
+          fusermount3 -u /tmp/mnt 2>/dev/null || fusermount -u /tmp/mnt 2>/dev/null || true
+          sed -n '1,20p' /tmp/fuse.log || true
+          sort -k2 -nr /tmp/heat.tsv 2>/dev/null | head -20 || true
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "## Native repovram FUSE + llama.cpp"
+            echo '```'
+            cat /tmp/bench.json 2>/dev/null | head -c 3000 || true
+            echo
+            tail -30 /tmp/fuse.log 2>/dev/null || true
+            echo '--- heat ---'
+            sort -k2 -nr /tmp/heat.tsv 2>/dev/null | head -20 || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
