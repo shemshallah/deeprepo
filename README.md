@@ -122,6 +122,11 @@ Build with `cmake -S native/repovram-fuse -B build && cmake --build build`; moun
 --cache-pages 512 --pin-pages 256`. `10-native-fuse-30b` benchmarks it. It also passes
 `--fit off` to llama.cpp so the fit pass does not load the model twice.
 
+**Native result (2026-11-04):** 0.117 tok/s decode / 0.37 tok/s prefill, slower than the
+Python page reader's 0.225 tok/s. The C++ path is correct but its per-page fetch latency is
+higher; it is experimental, not the default. Hot pinning hit its 256-page cap but did not
+overcome the load latency. The 0.225 tok/s Python FUSE path remains the best 30B result.
+
 **Measured 30B Q4 llama.cpp benchmark (`09-llama-30b`)** — FUSE-exposed repovram file,
 mmap'd by llama.cpp: **0.225 tok/s decode (4.45 s/token)**, **0.78 tok/s prefill**,
 136 s model load, 33.7 GiB read through FUSE (256-page cache). That is **~5× faster
