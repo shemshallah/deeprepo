@@ -68,6 +68,22 @@ class Env:
         s.regs.commit()
         return True
 
+    def tune_vram_cache(s, key=None, f16_cache_mb=1536):
+        """Size the page cache to the model + this VM, instead of a fixed page count."""
+        mi = s.model_info(key) or {}
+        if not mi.get("size"):
+            return {}
+        pages = -(-int(mi["size"]) // PAGE)
+        try:
+            ram_gb = os.sysconf("SC_PHYS_PAGES") * os.sysconf("SC_PAGE_SIZE") / 2**30
+        except Exception:
+            ram_gb = 8.0
+        reserve_gb = 2.2 + f16_cache_mb / 1024.0   # f16 cache + head + workspace + python
+        cap = int(max(0.0, ram_gb - reserve_gb) * 256)  # 256 pages per GiB
+        cap = max(256, min(pages + 64, cap))
+        s.vram.cap = cap
+        return {"model_pages": pages, "cache_pages": cap, "ram_gb": round(ram_gb, 1)}
+
     def model_info(s, key=None):
         return s.regs.get(f"vram/models/{key}") if key else s.regs.get("vram/model")
 

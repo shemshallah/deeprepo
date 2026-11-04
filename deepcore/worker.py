@@ -90,8 +90,10 @@ def _run_shift(env, job_id, shift_minutes, shift_tokens, max_shifts, log):
     made = len(prev)
     made_start = made
     max_new = int(gen.get("max_tokens", 256))
-    eng = env.engine(key=model_key, f16_cache_mb=int(job.get("f16_cache_mb", 2560)),
-                     chunk=int(job.get("chunk", 256)))
+    f16 = int(job.get("f16_cache_mb", 1856))
+    tinfo = env.tune_vram_cache(model_key, f16)
+    log(f"cache: {tinfo}")
+    eng = env.engine(key=model_key, f16_cache_mb=f16, chunk=int(job.get("chunk", 256)))
     room = max(64, int(eng.ctx) - max_new - 8)
     if len(prompt_ids) > room:
         if made:

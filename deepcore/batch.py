@@ -137,9 +137,11 @@ def answer(env, issue, model_key=None, max_tokens=48, log=print):
     tok = env.tokenizer(model_key)
     ids = tok.chat_ids(req["messages"])
     kv = MemKV()
+    tinfo = env.tune_vram_cache(model_key, 1024)
+    log(f"batch: cache {tinfo}")
     eng = env.engine(key=model_key, ramkv=kv,
                      kv_layout={"base": 0, "bytes": 4 << 30},
-                     f16_cache_mb=1792, chunk=192)
+                     f16_cache_mb=1024, chunk=192)
     handle = _begin(repo, token, issue, req["handle"])
     text, last, t0 = "", time.time(), time.time()
     logits = None
