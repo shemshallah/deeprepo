@@ -123,6 +123,13 @@ jobs:
           sed -n '1,20p' /tmp/fuse.log || true
           sort -k2 -nr /tmp/heat.tsv 2>/dev/null | head -20 || true
 
+      - name: Cleanup
+        if: always()
+        run: |
+          kill $(cat /tmp/llama.pid) 2>/dev/null || true
+          pkill -f repovram-fuse 2>/dev/null || true
+          fusermount3 -u /tmp/mnt 2>/dev/null || fusermount -u /tmp/mnt 2>/dev/null || true
+
       - name: Summary
         if: always()
         run: |

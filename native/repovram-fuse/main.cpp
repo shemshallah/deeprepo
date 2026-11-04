@@ -57,9 +57,12 @@ public:
         std::snprintf(name, sizeof(name), "mem-%02zu.bin", bin);
         const std::string url = "https://github.com/" + repo_ + "/releases/download/" +
                                 tag_ + "/" + name;
+        static thread_local CURL *tls_curl = nullptr;
         for (int attempt = 0; attempt < 5; ++attempt) {
-            CURL *c = curl_easy_init();
+            CURL *c = tls_curl;
+            if (!c) { c = curl_easy_init(); tls_curl = c; }
             if (!c) throw std::runtime_error("curl_easy_init failed");
+            curl_easy_reset(c);
             std::vector<uint8_t> out;
             std::string range = std::to_string(off) + "-" +
                                 std::to_string(off + n - 1);
@@ -77,12 +80,12 @@ public:
             curl_easy_setopt(c, CURLOPT_CONNECTTIMEOUT, 30L);
             curl_easy_setopt(c, CURLOPT_TIMEOUT, 180L);
             curl_easy_setopt(c, CURLOPT_NOSIGNAL, 1L);
+            curl_easy_setopt(c, CURLOPT_TCP_KEEPALIVE, 1L);
             curl_easy_setopt(c, CURLOPT_USERAGENT, "repovram-fuse/1.0");
             CURLcode rc = curl_easy_perform(c);
             long status = 0;
             curl_easy_getinfo(c, CURLINFO_RESPONSE_CODE, &status);
             curl_slist_free_all(headers);
-            curl_easy_cleanup(c);
             if (rc == CURLE_OK && (status == 404 || status == 416)) return {};
             if (rc == CURLE_OK && (status == 200 || status == 206)) {
                 if (status == 200 && off) {
