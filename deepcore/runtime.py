@@ -71,15 +71,16 @@ class Env:
     def model_info(s, key=None):
         return s.regs.get(f"vram/models/{key}") if key else s.regs.get("vram/model")
 
-    def engine(s, key=None, **opts):
+    def engine(s, key=None, ramkv=None, **opts):
         mi = s.model_info(key)
         if not mi or not mi.get("ready"):
             raise IOError(f"no model loaded in repovram ({key or 'default'}; run load-model)")
         from .engine import Qwen3MoE
         kv_layout = {"base": read_super(s.ram)["layout"]["kv"][0] * PAGE,
                      "bytes": read_super(s.ram)["layout"]["kv"][1] * PAGE}
+        kv = ramkv if ramkv is not None else (s.ram if s.writer else None)
         return Qwen3MoE(s.vram, int(mi.get("base", 1)), int(mi["size"]),
-                        ramkv=s.ram if s.writer else None, kv_layout=kv_layout, **opts)
+                        ramkv=kv, kv_layout=opts.pop("kv_layout", kv_layout), **opts)
 
     def tokenizer(s, key=None):
         from .tok import BPETokenizer

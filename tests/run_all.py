@@ -7,7 +7,7 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
-MODS = ["test_dequant.py", "test_units.py", "test_import.py", "test_engine.py", "test_ring.py", "test_local_tiers.py", "test_disk_cache.py", "test_middle.py", "test_status.py"]
+MODS = ["test_dequant.py", "test_units.py", "test_import.py", "test_engine.py", "test_ring.py", "test_local_tiers.py", "test_disk_cache.py", "test_middle.py", "test_status.py", "test_batch.py"]
 
 
 def main(argv):

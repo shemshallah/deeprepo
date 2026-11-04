@@ -244,6 +244,17 @@ def main(argv=None):
     if cmd == "gate":
         from .runtime import Env
         return cmd_gate(Env(writer=True), "--fail" not in argv, arg("--note", ""))
+    if cmd == "batch":
+        from . import batch
+        from . import ring
+        env = Env(writer=False)
+        env.main_repo = env.main_repo or __import__("os").environ.get("GITHUB_REPOSITORY", "")
+        slots = ring.ring_slots(env.main_repo)
+        n = int(arg("--limit", "5"))
+        out = batch.dispatch(env, slots[:n], limit=n, model_key=arg("--model") or None,
+                             max_tokens=int(arg("--max-tokens", "48")))
+        print(json.dumps(out))
+        return 0
     if cmd == "sweep":
         from .runtime import Env
         return cmd_sweep(Env(writer=True), arg("--op", "selftest"))

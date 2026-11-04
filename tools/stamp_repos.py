@@ -16,9 +16,9 @@ on:
   workflow_dispatch:
     inputs:
       op:
-        description: prewarm | run | selftest
+        description: prewarm | run | selftest | chat
         type: choice
-        options: [prewarm, run, selftest]
+        options: [prewarm, run, selftest, chat]
         default: prewarm
       job:
         description: job id for op=run
@@ -28,6 +28,18 @@ on:
         description: shift wall-clock budget
         type: string
         default: "20"
+      issue:
+        description: issue number for op=chat (batch mode)
+        type: string
+        default: ""
+      model:
+        description: model key (empty = active/CHAT_MODEL)
+        type: string
+        default: ""
+      max_tokens:
+        description: reply cap for op=chat
+        type: string
+        default: "48"
 
 permissions:
   contents: read

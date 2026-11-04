@@ -216,7 +216,15 @@ def op_selftest(env):
     return {"ok": ok}
 
 
-OPS = {"prewarm": op_prewarm, "run": op_run, "selftest": op_selftest}
+def op_chat(env, issue, model=None, max_tokens=48, log=_log):
+    """Batch mode: answer one issue with local KV (no reporam/journal writes)."""
+    from . import batch
+    env.main_repo = env.main_repo or os.environ.get("GITHUB_REPOSITORY", "")
+    txt = batch.answer(env, issue, model_key=model or None, max_tokens=max_tokens, log=log)
+    return {"ok": True, "chars": len(txt)}
+
+
+OPS = {"prewarm": op_prewarm, "run": op_run, "selftest": op_selftest, "chat": op_chat}
 
 
 def main(argv):
@@ -230,6 +238,9 @@ def main(argv):
     ap.add_argument("--cache-pages", type=int, default=2048)
     ap.add_argument("--kv-cache-pages", type=int, default=256)
     ap.add_argument("--strict", action="store_true")
+    ap.add_argument("--issue", type=int, default=0)
+    ap.add_argument("--model", default="")
+    ap.add_argument("--max-tokens", type=int, default=48)
     a = ap.parse_args(argv)
     from .runtime import Env
     # clamp the page cache to what this VM can actually hold (public runners: 16 GiB)
@@ -244,9 +255,12 @@ def main(argv):
     if a.op == "drain":
         env.ram.flush(max_pages=128)
         return 0
-    res = OPS[a.op](env, **({"job_id": a.job, "shift_minutes": a.shift_minutes,
-                              "shift_tokens": a.shift_tokens, "max_shifts": a.max_shifts}
-                             if a.op == "run" else {}))
+    if a.op == "chat":
+        res = op_chat(env, a.issue, model=a.model or None, max_tokens=a.max_tokens)
+    else:
+        res = OPS[a.op](env, **({"job_id": a.job, "shift_minutes": a.shift_minutes,
+                                  "shift_tokens": a.shift_tokens, "max_shifts": a.max_shifts}
+                                 if a.op == "run" else {}))
     _log("RESULT", json.dumps(res)[:2000])
     return 0 if res.get("ok", True) else 1
 
