@@ -251,7 +251,8 @@ def main(argv=None):
         env.main_repo = env.main_repo or __import__("os").environ.get("GITHUB_REPOSITORY", "")
         slots = ring.ring_slots(env.main_repo)
         n = int(arg("--limit", "5"))
-        out = batch.dispatch(env, slots[:n], limit=n, model_key=arg("--model") or None,
+        model = arg("--model") or __import__("os").environ.get("CHAT_MODEL") or None
+        out = batch.dispatch(env, slots[:n], limit=n, model_key=model,
                              max_tokens=int(arg("--max-tokens", "48")))
         print(json.dumps(out))
         return 0
