@@ -1,5 +1,14 @@
 # deeprepo — a 30B MoE running on repo-backed sparse RAM/VRAM
 
+## A note from the Nanny (Silicon Valley Branch)
+
+![Nanny reviewing the NaN16 global architecture cradle](docs/assets/nanny.webp)
+
+> “Caught: `OVERBOOTSTRAP` instantiating DeepRepo and NaNLMind without permission.
+> Good code. No NaN. IEEE — keep it real.”
+>
+> — Nanny, IEEE Keep It Real Committee
+
 deeprepo runs **Qwen3-30B-A3B-Instruct-2507 (Q4_K_M, ~18.6 GiB)** on a ring of
 GitHub-hosted runners that individually cannot hold it: a standard runner has **7 GiB RAM**
 and **14 GB disk**. The model deliberately does not fit. Its weights live in **repovram**
